@@ -1,0 +1,33 @@
+==================================================
+--- S2 Community Market: Key Metrics Summary ---  
+==================================================
+
+## Aggregate Metrics (Entire Community) ##        
+Total Utility Cost (ZAR):   ZAR 638.44
+Total P2P Volume Traded:    49.20 kWh
+Total Grid Imports:         212.81 kWh
+Total Energy Curtailed:     280.13 kWh
+
+--------------------------------------------------
+
+## Per-Agent Average Metrics (S2) ##
+
+### Prosumer (per household) ###
+Average P2P Revenue:        ZAR 6.31
+Average Grid Cost:          ZAR 0.04
+Average Net Outcome:        ZAR 6.27 (Profit)
+
+### Consumer (per household) ###
+Average Grid Cost:          ZAR 42.52
+Average P2P Savings:        ZAR 3.53
+
+--------------------------------------------------
+
+## Thesis Comparison Metrics (S2) ##
+Total System Benefit (P2P): ZAR 147.59
+Gini (P2P Benefits):        0.220
+Gini (Utility Costs):       0.561
+Gini (Net Outcomes):        0.377
+Feeder Overload Frequency:  93.55%
+
+==================================================

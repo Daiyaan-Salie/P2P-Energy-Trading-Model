@@ -1,2 +1,0 @@
-total_load_kwh,total_pv_kwh,total_p2p_kwh,total_grid_kwh,self_consumption_ratio,curtailed_kwh,utility_export_kwh,utility_export_revenue_zar,mcp_mean,mcp_weighted,feeder_cap_kw,peak_util,exec_rate,finalize_rate,gini_p2p_benefits,gini_utility_costs,gini_net_outcomes
-522.2950640501838,550.3921232478943,36.980000000000004,189.56708497076764,0.07080289006224812,0.0,12.74,10.829,1.4631124193548388,1.3895512777176853,5.0,1.0,0.9791666666666666,0.65625,0.527489509734673,0.662549876590288,0.3565483312262736

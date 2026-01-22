@@ -1,0 +1,16 @@
+{
+  "run_dir": "runs\\2026-01-21_23-09-06",
+  "settlement_dir": "runs\\2026-01-21_23-09-06\\settlement",
+  "app_id": 753211496,
+  "zar_asa_id": 753211650,
+  "kwh_asa_id": 753211661,
+  "coordinator_addr": "TJYFBOEVSD3LHWYHRBI34HL2M67FOPKKCFAN46URZN64QCJOJ7VLTN7GBU",
+  "start_interval": 0,
+  "end_interval": 95,
+  "dry_run": false,
+  "no_finalize": false,
+  "aggregate": false,
+  "batch_size": 25,
+  "max_trades": 0,
+  "timestamp": "2026-01-21 23:09:50"
+}
