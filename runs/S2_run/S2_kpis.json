@@ -1,0 +1,13 @@
+{
+  "total_load_kwh": 486.9415397274672,
+  "total_pv_kwh": 566.1059001170518,
+  "total_p2p_kwh": 48.540712303556084,
+  "total_grid_import_kwh": 195.62676143028528,
+  "total_curtailment_kwh": 304.8367468950142,
+  "community_self_sufficiency_percent": 59.8254111695268,
+  "consumer_surplus_zar": 116.6736048282211,
+  "prosumer_profit_zar": 28.948532082447148,
+  "total_system_benefit_zar": 145.62213691066825,
+  "gini_index_benefits": 0.37361753250537655,
+  "feeder_overload_frequency_percent": 30.208333333333332
+}

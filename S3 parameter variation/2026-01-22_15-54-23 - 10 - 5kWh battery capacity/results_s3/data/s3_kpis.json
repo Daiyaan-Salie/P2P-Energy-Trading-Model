@@ -1,0 +1,19 @@
+{
+  "total_load_kwh": 522.2950640501838,
+  "total_pv_kwh": 550.3921232478943,
+  "total_p2p_kwh": 38.230000000000004,
+  "total_grid_kwh": 189.56708497076764,
+  "self_consumption_ratio": 0.07319617325797041,
+  "curtailed_kwh": 0.0,
+  "utility_export_kwh": 12.74,
+  "utility_export_revenue_zar": 10.829,
+  "mcp_mean": 1.4513679375,
+  "mcp_weighted": 1.3796682579126343,
+  "feeder_cap_kw": 5.0,
+  "peak_util": 1.0,
+  "exec_rate": 1.0,
+  "finalize_rate": 0.6666666666666666,
+  "gini_p2p_benefits": 0.5359210382397661,
+  "gini_utility_costs": 0.666271208274902,
+  "gini_net_outcomes": 0.40728828877701884
+}

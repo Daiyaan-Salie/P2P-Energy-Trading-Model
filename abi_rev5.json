@@ -1,0 +1,94 @@
+{
+  "name": "P2P Energy DEX Rev5 (Rev4-baseline, Dynamic-MCP, microZAR)",
+  "methods": [
+    {
+      "name": "setup_market",
+      "args": [
+        {
+          "type": "asset",
+          "name": "kwh_asset"
+        },
+        {
+          "type": "asset",
+          "name": "zar_asset"
+        },
+        {
+          "type": "uint64",
+          "name": "floor_micro"
+        },
+        {
+          "type": "uint64",
+          "name": "tariff_micro"
+        },
+        {
+          "type": "uint64",
+          "name": "feeder_cap_units"
+        }
+      ],
+      "returns": {
+        "type": "string"
+      },
+      "desc": "One-time setup (creator only):\n- store ASA ids for kWh and ZAR   - store pricing bounds (micro-ZAR/kWh)   - store feeder cap (0.01 kWh units per interval)   - init interval state"
+    },
+    {
+      "name": "execute_interval",
+      "args": [
+        {
+          "type": "uint64",
+          "name": "interval"
+        },
+        {
+          "type": "uint64",
+          "name": "sum_supply_units"
+        },
+        {
+          "type": "uint64",
+          "name": "sum_demand_units"
+        }
+      ],
+      "returns": {
+        "type": "string"
+      },
+      "desc": "Begin a new interval and compute MCP ON-CHAIN.\nInputs:   - sum_supply_units: total seller energy available (0.01 kWh units)   - sum_demand_units: total buyer demand (0.01 kWh units)\nDynamic-MCP (micro-ZAR/kWh):   MCP = FLOOR + (TARIFF - FLOOR) * clamp(demand/supply, 0..1) Implemented using fixed-point ratio_scaled in [0, SCALE]."
+    },
+    {
+      "name": "record_trade",
+      "args": [
+        {
+          "type": "uint64",
+          "name": "interval"
+        },
+        {
+          "type": "address",
+          "name": "buyer"
+        },
+        {
+          "type": "address",
+          "name": "seller"
+        },
+        {
+          "type": "uint64",
+          "name": "qty_units"
+        }
+      ],
+      "returns": {
+        "type": "string"
+      },
+      "desc": "Records one scaled P2P trade (Rev4-style batching via RELATIVE checks).\nExpected atomic group \"chunk\" (3 txns):   [i]  : ApplicationCall (this method, from Creator/Oracle)   [i+1]: AssetTransfer (KWH_TKN) seller -> buyer   [i+2]: AssetTransfer (ZAR_TKN) buyer  -> seller\nKWH transfer amount:   qty_units * 10   (because 0.01 kWh units and KWH token has 0.001 kWh base)\nZAR transfer amount (micro-ZAR):   max(1, floor(qty_units * mcp_micro / 100))   because qty_units represent qty_units/100 kWh."
+    },
+    {
+      "name": "finalize_interval",
+      "args": [
+        {
+          "type": "uint64",
+          "name": "interval"
+        }
+      ],
+      "returns": {
+        "type": "string"
+      },
+      "desc": "Finalize interval (creator only).\nStrict reconciliation: traded_u must equal allowed_u."
+    }
+  ],
+  "networks": {}
+}

@@ -1,0 +1,10 @@
+{
+  "created_utc": "2025-11-03T20:51:49Z",
+  "source": "S3b_model.py",
+  "csv_file": "s3b_trades_data.csv",
+  "sha256": "7ce4824ea80f0e4182dd23486a9fe247f1f8b61017d685e293bedc6d1dc51b0f",
+  "num_rows": 130730,
+  "num_intervals": 1344,
+  "feeder_mode": "global",
+  "feeder_apply_on": "seller"
+}

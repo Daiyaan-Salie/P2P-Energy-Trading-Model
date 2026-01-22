@@ -1,0 +1,11 @@
+{
+  "battery_charge_threshold": 0.9,
+  "battery_reserve_kwh": 9.0,
+  "feeder_capacity_kw": 5.0,
+  "utility_tariff": 3.0,
+  "price_floor": 0.5,
+  "num_intervals": 96,
+  "total_households": 30,
+  "num_prosumers": 15,
+  "num_consumers": 15
+}

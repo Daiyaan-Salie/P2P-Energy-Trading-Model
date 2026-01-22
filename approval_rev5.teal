@@ -1,0 +1,635 @@
+#pragma version 8
+txn NumAppArgs
+int 0
+==
+bnz main_l10
+txna ApplicationArgs 0
+method "setup_market(asset,asset,uint64,uint64,uint64)string"
+==
+bnz main_l9
+txna ApplicationArgs 0
+method "execute_interval(uint64,uint64,uint64)string"
+==
+bnz main_l8
+txna ApplicationArgs 0
+method "record_trade(uint64,address,address,uint64)string"
+==
+bnz main_l7
+txna ApplicationArgs 0
+method "finalize_interval(uint64)string"
+==
+bnz main_l6
+err
+main_l6:
+txn OnCompletion
+int NoOp
+==
+txn ApplicationID
+int 0
+!=
+&&
+assert
+callsub finalizeintervalcaster_7
+int 1
+return
+main_l7:
+txn OnCompletion
+int NoOp
+==
+txn ApplicationID
+int 0
+!=
+&&
+assert
+callsub recordtradecaster_6
+int 1
+return
+main_l8:
+txn OnCompletion
+int NoOp
+==
+txn ApplicationID
+int 0
+!=
+&&
+assert
+callsub executeintervalcaster_5
+int 1
+return
+main_l9:
+txn OnCompletion
+int NoOp
+==
+txn ApplicationID
+int 0
+!=
+&&
+assert
+callsub setupmarketcaster_4
+int 1
+return
+main_l10:
+txn OnCompletion
+int NoOp
+==
+bnz main_l12
+err
+main_l12:
+int 1
+return
+
+// setup_market
+setupmarket_0:
+proto 5 1
+byte ""
+txn Sender
+global CreatorAddress
+==
+assert
+frame_dig -2
+frame_dig -3
+>=
+assert
+byte "kwh_id"
+frame_dig -5
+txnas Assets
+app_global_put
+byte "zar_id"
+frame_dig -4
+txnas Assets
+app_global_put
+byte "floor_micro"
+frame_dig -3
+app_global_put
+byte "tariff_micro"
+frame_dig -2
+app_global_put
+byte "feeder_cap_u"
+frame_dig -1
+app_global_put
+byte "cur_interval"
+int 0
+app_global_put
+byte "mcp_micro"
+int 0
+app_global_put
+byte "allowed_u"
+int 0
+app_global_put
+byte "traded_u"
+int 0
+app_global_put
+byte "Market setup complete! (Rev5 microZAR)"
+frame_bury 0
+frame_dig 0
+len
+itob
+extract 6 0
+frame_dig 0
+concat
+frame_bury 0
+retsub
+
+// execute_interval
+executeinterval_1:
+proto 3 1
+byte ""
+txn Sender
+global CreatorAddress
+==
+assert
+byte "cur_interval"
+frame_dig -3
+app_global_put
+byte "mcp_micro"
+byte "floor_micro"
+app_global_get
+byte "tariff_micro"
+app_global_get
+byte "floor_micro"
+app_global_get
+-
+frame_dig -2
+int 0
+==
+bnz executeinterval_1_l27
+frame_dig -1
+int 1000000
+mulw
+int 0
+frame_dig -2
+divmodw
+pop
+pop
+swap
+!
+assert
+int 1000000
+<=
+bnz executeinterval_1_l26
+int 1000000
+executeinterval_1_l3:
+mulw
+int 0
+int 1000000
+divmodw
+pop
+pop
+swap
+!
+assert
++
+app_global_put
+byte "allowed_u"
+frame_dig -2
+frame_dig -1
+<=
+bnz executeinterval_1_l25
+frame_dig -1
+executeinterval_1_l5:
+byte "feeder_cap_u"
+app_global_get
+<=
+bnz executeinterval_1_l22
+byte "feeder_cap_u"
+app_global_get
+executeinterval_1_l7:
+app_global_put
+byte "traded_u"
+int 0
+app_global_put
+frame_dig -3
+itob
+frame_dig -2
+frame_dig -1
+<=
+bnz executeinterval_1_l21
+frame_dig -1
+executeinterval_1_l9:
+byte "feeder_cap_u"
+app_global_get
+<=
+bnz executeinterval_1_l18
+byte "feeder_cap_u"
+app_global_get
+executeinterval_1_l11:
+itob
+concat
+byte "floor_micro"
+app_global_get
+byte "tariff_micro"
+app_global_get
+byte "floor_micro"
+app_global_get
+-
+frame_dig -2
+int 0
+==
+bnz executeinterval_1_l15
+frame_dig -1
+int 1000000
+mulw
+int 0
+frame_dig -2
+divmodw
+pop
+pop
+swap
+!
+assert
+int 1000000
+<=
+bnz executeinterval_1_l14
+int 1000000
+b executeinterval_1_l30
+executeinterval_1_l14:
+frame_dig -1
+int 1000000
+mulw
+int 0
+frame_dig -2
+divmodw
+pop
+pop
+swap
+!
+assert
+b executeinterval_1_l30
+executeinterval_1_l15:
+frame_dig -1
+int 0
+>
+bnz executeinterval_1_l17
+int 0
+b executeinterval_1_l30
+executeinterval_1_l17:
+int 1000000
+b executeinterval_1_l30
+executeinterval_1_l18:
+frame_dig -2
+frame_dig -1
+<=
+bnz executeinterval_1_l20
+frame_dig -1
+b executeinterval_1_l11
+executeinterval_1_l20:
+frame_dig -2
+b executeinterval_1_l11
+executeinterval_1_l21:
+frame_dig -2
+b executeinterval_1_l9
+executeinterval_1_l22:
+frame_dig -2
+frame_dig -1
+<=
+bnz executeinterval_1_l24
+frame_dig -1
+b executeinterval_1_l7
+executeinterval_1_l24:
+frame_dig -2
+b executeinterval_1_l7
+executeinterval_1_l25:
+frame_dig -2
+b executeinterval_1_l5
+executeinterval_1_l26:
+frame_dig -1
+int 1000000
+mulw
+int 0
+frame_dig -2
+divmodw
+pop
+pop
+swap
+!
+assert
+b executeinterval_1_l3
+executeinterval_1_l27:
+frame_dig -1
+int 0
+>
+bnz executeinterval_1_l29
+int 0
+b executeinterval_1_l3
+executeinterval_1_l29:
+int 1000000
+b executeinterval_1_l3
+executeinterval_1_l30:
+mulw
+int 0
+int 1000000
+divmodw
+pop
+pop
+swap
+!
+assert
++
+itob
+concat
+log
+byte "Interval configured (Dynamic-MCP)"
+frame_bury 0
+frame_dig 0
+len
+itob
+extract 6 0
+frame_dig 0
+concat
+frame_bury 0
+retsub
+
+// record_trade
+recordtrade_2:
+proto 4 1
+byte ""
+txn Sender
+global CreatorAddress
+==
+assert
+frame_dig -4
+byte "cur_interval"
+app_global_get
+==
+assert
+frame_dig -1
+int 0
+>
+assert
+byte "traded_u"
+app_global_get
+frame_dig -1
++
+byte "allowed_u"
+app_global_get
+<=
+assert
+txn GroupIndex
+int 1
++
+gtxns TypeEnum
+int 4
+==
+assert
+txn GroupIndex
+int 1
++
+gtxns XferAsset
+byte "kwh_id"
+app_global_get
+==
+assert
+txn GroupIndex
+int 1
++
+gtxns AssetAmount
+frame_dig -1
+int 10
+*
+==
+assert
+txn GroupIndex
+int 1
++
+gtxns Sender
+frame_dig -2
+==
+assert
+txn GroupIndex
+int 1
++
+gtxns AssetReceiver
+frame_dig -3
+==
+assert
+txn GroupIndex
+int 2
++
+gtxns TypeEnum
+int 4
+==
+assert
+txn GroupIndex
+int 2
++
+gtxns XferAsset
+byte "zar_id"
+app_global_get
+==
+assert
+txn GroupIndex
+int 2
++
+gtxns AssetAmount
+frame_dig -1
+byte "mcp_micro"
+app_global_get
+mulw
+int 0
+int 100
+divmodw
+pop
+pop
+swap
+!
+assert
+int 0
+>
+bnz recordtrade_2_l2
+int 1
+b recordtrade_2_l3
+recordtrade_2_l2:
+frame_dig -1
+byte "mcp_micro"
+app_global_get
+mulw
+int 0
+int 100
+divmodw
+pop
+pop
+swap
+!
+assert
+recordtrade_2_l3:
+==
+assert
+txn GroupIndex
+int 2
++
+gtxns Sender
+frame_dig -3
+==
+assert
+txn GroupIndex
+int 2
++
+gtxns AssetReceiver
+frame_dig -2
+==
+assert
+byte "traded_u"
+byte "traded_u"
+app_global_get
+frame_dig -1
++
+app_global_put
+frame_dig -4
+itob
+frame_dig -1
+itob
+concat
+byte "mcp_micro"
+app_global_get
+itob
+concat
+log
+byte "Trade recorded"
+frame_bury 0
+frame_dig 0
+len
+itob
+extract 6 0
+frame_dig 0
+concat
+frame_bury 0
+retsub
+
+// finalize_interval
+finalizeinterval_3:
+proto 1 1
+byte ""
+txn Sender
+global CreatorAddress
+==
+assert
+frame_dig -1
+byte "cur_interval"
+app_global_get
+==
+assert
+byte "traded_u"
+app_global_get
+byte "allowed_u"
+app_global_get
+==
+assert
+byte "Interval finalized"
+frame_bury 0
+frame_dig 0
+len
+itob
+extract 6 0
+frame_dig 0
+concat
+frame_bury 0
+retsub
+
+// setup_market_caster
+setupmarketcaster_4:
+proto 0 0
+byte ""
+int 0
+dupn 4
+txna ApplicationArgs 1
+int 0
+getbyte
+frame_bury 1
+txna ApplicationArgs 2
+int 0
+getbyte
+frame_bury 2
+txna ApplicationArgs 3
+btoi
+frame_bury 3
+txna ApplicationArgs 4
+btoi
+frame_bury 4
+txna ApplicationArgs 5
+btoi
+frame_bury 5
+frame_dig 1
+frame_dig 2
+frame_dig 3
+frame_dig 4
+frame_dig 5
+callsub setupmarket_0
+frame_bury 0
+byte 0x151f7c75
+frame_dig 0
+concat
+log
+retsub
+
+// execute_interval_caster
+executeintervalcaster_5:
+proto 0 0
+byte ""
+int 0
+dupn 2
+txna ApplicationArgs 1
+btoi
+frame_bury 1
+txna ApplicationArgs 2
+btoi
+frame_bury 2
+txna ApplicationArgs 3
+btoi
+frame_bury 3
+frame_dig 1
+frame_dig 2
+frame_dig 3
+callsub executeinterval_1
+frame_bury 0
+byte 0x151f7c75
+frame_dig 0
+concat
+log
+retsub
+
+// record_trade_caster
+recordtradecaster_6:
+proto 0 0
+byte ""
+int 0
+byte ""
+dup
+int 0
+txna ApplicationArgs 1
+btoi
+frame_bury 1
+txna ApplicationArgs 2
+frame_bury 2
+txna ApplicationArgs 3
+frame_bury 3
+txna ApplicationArgs 4
+btoi
+frame_bury 4
+frame_dig 1
+frame_dig 2
+frame_dig 3
+frame_dig 4
+callsub recordtrade_2
+frame_bury 0
+byte 0x151f7c75
+frame_dig 0
+concat
+log
+retsub
+
+// finalize_interval_caster
+finalizeintervalcaster_7:
+proto 0 0
+byte ""
+int 0
+txna ApplicationArgs 1
+btoi
+frame_bury 1
+frame_dig 1
+callsub finalizeinterval_3
+frame_bury 0
+byte 0x151f7c75
+frame_dig 0
+concat
+log
+retsub
