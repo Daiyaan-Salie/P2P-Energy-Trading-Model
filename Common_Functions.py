@@ -1,7 +1,28 @@
+"""
+Common_Functions.py
+===================
+
+This module contains reusable helper functions used across all simulation scenarios (S1, S2, S3).
+
+It includes:
+- Synthetic load and PV profile generation
+- Unit conversion utilities (kW ↔ kWh)
+- Market-clearing price helpers
+- Economic, fairness, and technical performance metrics
+
+
+This module is imported by:
+- S1_model.py (baseline scenario)
+- S2_model.py (unconstrained P2P trading)
+- S3_model.py (constrained P2P trading with feeder limits)
+"""
+
+
+
 import numpy as np
 import pandas as pd
 
-# --- 1. Data Generation Functions ---
+# ---------Profile generation functions-----------
 
 def _gaussian(x, mu, sig, amplitude):
     """
