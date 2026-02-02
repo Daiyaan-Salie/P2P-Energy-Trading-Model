@@ -22,24 +22,19 @@ This module is imported by:
 import numpy as np
 import pandas as pd
 
-# ---------Profile generation functions-----------
+# ---------1. Data Generation Functions-----------
 
+# --- Helper: Gaussian curve for synthetic demand shaping ----------------------
+# Used to create smooth morning/evening peaks in demand when generating synthetic household load profiles.
 def _gaussian(x, mu, sig, amplitude):
-    """
-    Helper function to create a Gaussian (bell curve).
-    Used to model the morning and evening electricity demand peaks.
-    """
     return amplitude * np.exp(-np.power(x - mu, 2.) / (2 * np.power(sig, 2.)))
 
-
+# --- Synthetic household demand profiles -------------
+# Returns a matrix of household demand over time. The functions below use these profiles as the baseline consumption signal for each household.
 
 def generate_household_profiles(num_households: int, num_intervals: int) -> np.ndarray:
     """
-    Generates realistic, synthetic electricity consumption (load) profiles for
-    South African households using a Gaussian model for peaks.
-
-    This improved model creates a smoother and more representative daily profile by
-    combining a base load with distinct morning and evening peaks, which is
+    Generates synthetic electricity demand profiles for a number of households. Profiles are generated in kWh for each interval.
 
     Args:
         num_households (int): The total number of households in the microgrid.
@@ -57,11 +52,11 @@ def generate_household_profiles(num_households: int, num_intervals: int) -> np.n
     # Slightly higher during the day.
     base_load_kw = 0.25 + 0.1 * np.sin(np.pi * (x - 24) / 48) # Low point at 6 AM
 
-    # Morning Peak (e.g., centered at 07:00)
+    # Morning Peak (e.g., centred at 07:00)
     # 7 AM is interval 28 (7 * 4)
     morning_peak = _gaussian(x, mu=28, sig=4, amplitude=1.0) # sig=4 means peak is ~2h wide
 
-    # Evening Peak (e.g., centered at 19:00)
+    # Evening Peak (e.g., centred at 19:00)
     # 7 PM is interval 76 (19 * 4)
     # This peak is typically higher than the morning one.
     evening_peak = _gaussian(x, mu=76, sig=6, amplitude=1.75) # sig=6 means peak is ~3h wide
@@ -94,6 +89,12 @@ def generate_household_profiles(num_households: int, num_intervals: int) -> np.n
 
     return np.array(household_loads)
 
+
+
+
+# --- Synthetic PV generation profiles ----------------------------------------
+# Generates PV output time-series for prosumers. These profiles are later used to compute net demand (load - PV) and energy available for P2P trading.
+
 def generate_pv_profiles(num_prosumers, num_intervals, peak_generation=5.0):
     """
     Generates synthetic PV generation profiles for prosumers.
@@ -125,9 +126,20 @@ def generate_pv_profiles(num_prosumers, num_intervals, peak_generation=5.0):
     
     return np.array(pv_generations)
 
+
+# --- 2. Model Helper Functions ---
+# --- Market price helper -----------------------------------------------------
+# Uniform Market Clearing Price (MCP) helper.
+# In this project, the MCP is constrained between a price floor and the utility
+# tariff (see config.py). This supports the economic rationale that P2P prices should not exceed buying from the utility and should not fall below a floor.
+
 def uniform_mcp(price_floor: float, utility_tariff: float) -> float:
     """Uniform market clearing price used by S2/S3a/S3b."""
     return (price_floor + utility_tariff) / 2.0
+
+# --- Unit conversions --------------------------------------------------------
+# Conversions assume fixed-length intervals (default 15 minutes).
+# These are heavily referenced in the report because kW (power) and kWh (energy) are both used depending on whether we describe instantaneous loading or energy transacted per interval.
 
 def kwh_to_kw(energy_kwh: float | np.ndarray, interval_minutes: int = 15):
     """Convert energy in a slot to average power over that slot."""
@@ -138,18 +150,18 @@ def kw_to_kwh(power_kw: float | np.ndarray, interval_minutes: int = 15):
     return power_kw * (interval_minutes / 60.0)
 
 
-# --- 2. Metric Calculation Functions ---
+# --- 3. Economic Metrics ---
+# --- Economic welfare --------------------------------------------------------
+# Computes scenario-level welfare from the results DataFrame. This metric is used to compare baseline vs P2P scenarios in the report.
 
 def calculate_economic_welfare(results_df, utility_tariff):
     """
-    Calculates consumer surplus, prosumer profit, and total system benefit.
-    As defined in the 'Economic welfare' section of your proposal[cite: 60].
+    Calculates economic welfare based on consumer surplus + producer surplus.
     """
-    # Consumer surplus: Difference between what they would have paid the utility
-    # and what they paid in the P2P market.
+    # Consumer surplus = (utility tariff - p2p price) * quantity bought
     results_df['consumer_surplus'] = (utility_tariff - results_df['market_price']) * results_df['p2p_trade_volume']
     
-    # Prosumer profit: Revenue from P2P sales. Assumes marginal cost of solar is zero.
+     # Producer surplus = (p2p price - price floor) * quantity sold
     results_df['prosumer_profit'] = results_df['market_price'] * results_df['p2p_trade_volume']
 
     total_consumer_surplus = results_df.groupby('consumer_id')['consumer_surplus'].sum()
@@ -163,30 +175,38 @@ def calculate_economic_welfare(results_df, utility_tariff):
         "prosumer_profit_per_agent": total_prosumer_profit,
     }
 
+
+# --- 4. Fairness Metrics ---
+# --- Fairness metric: Gini index --------------------------------------------
+# Gini is applied to distributions of benefits (or costs) to assess equity.
+
 def calculate_gini_index(benefits):
     """
-    Calculates the Gini index for a distribution of benefits.
-    A value of 0 is perfect equality, 1 is perfect inequality[cite: 66].
+    Calculate the Gini coefficient of a list/array of benefits.
+
+    Gini = 0 indicates perfect equality.
+    Gini = 1 indicates maximum inequality.
     """
     if benefits.sum() == 0:
         return 0
-    # Sort array and ensure it's a numpy array
-    benefits = np.sort(np.array(benefits))
+    benefits = np.sort(np.array(benefits)) # shift to non-negative
     n = len(benefits)
     index = np.arange(1, n + 1)
     # Gini formula
     gini = (2 * np.sum(index * benefits) / (n * np.sum(benefits))) - (n + 1) / n
     return gini
 
+
+# --- Fairness summaries ------------------------------------------------------
+# Computes fairness-related summaries for consumers vs prosumers, typically reported as mean/median benefits and inequality measures.
+
 def calculate_fairness_metrics(consumer_benefits, prosumer_benefits):
     """
-    Calculates the Gini index and consumer-to-prosumer benefit ratio[cite: 64, 69].
+    Returns fairness metrics including Gini for consumers vs prosumers.
     """
     all_benefits = pd.concat([consumer_benefits, prosumer_benefits]).fillna(0)
-    
     gini_index = calculate_gini_index(all_benefits.values)
-    
-    total_consumer_surplus = consumer_benefits.sum()
+        total_consumer_surplus = consumer_benefits.sum()
     total_prosumer_profit = prosumer_benefits.sum()
     
     # Avoid division by zero if no prosumer profit
@@ -196,6 +216,11 @@ def calculate_fairness_metrics(consumer_benefits, prosumer_benefits):
         "gini_index": gini_index,
         "consumer_to_prosumer_ratio": c_to_p_ratio,
     }
+
+
+# --- 5. Technical Robustness Metrics ---
+# --- Technical robustness ----------------------------------------------------
+# Assesses network feasibility against feeder capacity (kW).
 
 def calculate_technical_robustness(results_df, feeder_capacity_kw):
     """
@@ -222,6 +247,10 @@ def calculate_technical_robustness(results_df, feeder_capacity_kw):
         "overload_severity_index_percent": overload_severity,
     }
 
+# --- 6. Blockchain / Reconciliation Diagnostics ---
+# --- Reconciliation diagnostics ---------------------------------------------
+# Compares local simulation logs to on-chain (blockchain) logs.
+
 def calculate_reconciliation_error(local_logs, blockchain_logs):
     """
     Calculates the discrepancy between local and blockchain records for S3b[cite: 74].
@@ -237,10 +266,14 @@ def calculate_reconciliation_error(local_logs, blockchain_logs):
     return error
 
 
+# --- 7. Feeder Constraint Helper ---
+# --- Feeder constraint scaling factor (alpha) -------------------------------
+# Computes a scaling factor (alpha) based on feeder capacity and total interval energy. This is used where feeder constraints require proportional scaling oftrading/flows to maintain feasibility.
+
 def compute_feeder_alpha(feeder_cap_kw: float, total_interval_kwh: float, interval_hours: float = 0.25) -> float:
     """
-    Computes the scaling factor α so that total P2P trades
-    in an interval don't exceed the feeder capacity.
+    Compute scaling factor alpha for feeder constraint.
+    alpha = min(1, feeder_cap_kw / (total_interval_kwh / interval_hours))
     """
     if total_interval_kwh <= 0:
         return 0.0
