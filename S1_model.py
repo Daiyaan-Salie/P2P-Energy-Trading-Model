@@ -1,12 +1,34 @@
-# S1_Visualizer.py
+#Model S1: Utility-Only Baseline Model
 #
-# This script runs the S1 Baseline (Utility-Only) simulation and then
-# generates a series of visualizations to analyze the results.
+# Purpose:
+# --------
+# This script implements the S1 baseline scenario, where:
+# - No peer-to-peer (P2P) energy trading is allowed
+# - All households interact only with the utility grid
+# - Prosumers may self-consume PV generation and charge/discharge batteries
+# - Excess generation is curtailed
 #
-# UPDATED FOR 24-HOUR NORMALISED HORIZON:
-# - Uses config.NUM_INTERVALS (96 = 24 hours)
-# - Plots now safely clip windows to available intervals (no 7-day assumptions)
-# - "Week" titles adapt to "Day" when horizon < 7 days
+# Role in the thesis/report:
+# --------------------------
+# - Serves as the reference (counterfactual) scenario
+# - Provides baseline metrics for cost, fairness, and technical performance
+# - Used for comparison against S2 (unconstrained P2P) and S3 (constrained P2P)
+#
+# Key assumptions:
+# ----------------
+# - Time resolution: 15-minute intervals (NUM_INTERVALS = 96 for 24 hours)
+# - Energy units: kWh per interval
+# - Power units (for plots): kW (converted using ×4)
+# - Batteries are initialised at 50% state of charge
+#
+# Outputs:
+# --------
+# - Printed summary metrics to console
+# - PNG figures saved to disk:
+#     * S1_aggregate_summary.png
+#     * S1_community_power_flow.png
+#     * S1_average_battery_soc.png
+#     * S1_average_daily_power_transfer.png
 
 import numpy as np
 import pandas as pd
@@ -16,12 +38,15 @@ import config
 import Common_Functions as common
 
 
+# -------------------------------------------------------------------------
+# Helper: Gini calculation allowing negative values
+# -------------------------------------------------------------------------
+# In S1, net outcomes (benefits − utility costs) are negative for all agents.
+# Since the Gini coefficient is defined for non-negative distributions, this helper shifts the distribution if required while preserving inequality
+# structure. This ensures fairness metrics are comparable with S3.
+
+
 def gini_shift_allow_negative(values: np.ndarray) -> float:
-    """
-    Gini is defined for non-negative distributions.
-    For "net outcomes" that may be negative, shift distribution by -min(x) if needed.
-    This preserves inequality structure while making inputs non-negative.
-    """
     x = np.asarray(values, dtype=float)
     x = np.where(np.isfinite(x), x, 0.0)
     if np.allclose(x, 0.0):
@@ -34,6 +59,16 @@ def gini_shift_allow_negative(values: np.ndarray) -> float:
     return float(common.calculate_gini_index(x))
 
 
+
+# -------------------------------------------------------------------------
+# Core S1 Simulation
+# -------------------------------------------------------------------------
+# This function executes the baseline physical energy flow logic:
+# - Load and PV generation profiles are generated
+# - Batteries are operated locally by prosumers
+# - Consumers import all energy from the grid
+# - No trading or market mechanisms are present
+
 def run_s1_simulation():
     """
     Executes the S1 baseline simulation and returns the detailed results.
@@ -41,40 +76,59 @@ def run_s1_simulation():
     print("--- Running S1: Utility-Only Baseline Model ---")
 
     # --- Setup & Data Generation ---
+    # Fix seed for reproducibility across runs and scenarios
     np.random.seed(42)
     num_households = config.TOTAL_HOUSEHOLDS
     num_prosumers = int(num_households * config.PROSUMER_SHARE)
     num_intervals = config.NUM_INTERVALS
 
+    # Generate household load profiles (kWh per interval)
     load_profiles_kwh = common.generate_household_profiles(num_households, num_intervals)
+
+    # Generate PV generation profiles for prosumers only
     pv_profiles_kwh = common.generate_pv_profiles(num_prosumers, num_intervals, config.PEAK_PV_GENERATION_KW)
+    
+     # Align generation matrix with household indexing
     generation_profiles_kwh = np.zeros_like(load_profiles_kwh)
     generation_profiles_kwh[:num_prosumers, :] = pv_profiles_kwh
 
-    # --- Simulation Loop ---
+    # --- State Variables -----------
+    # Battery state of charge (extra column to store t=0 initial state)
     battery_soc_kwh = np.zeros((num_prosumers, num_intervals + 1))
     battery_soc_kwh[:, 0] = config.BATTERY_CAPACITY_KWH * 0.5
+
+    # Energy imported from the grid (kWh per interval)
     grid_imports_kwh = np.zeros_like(load_profiles_kwh)
+
+    # Excess PV generation that cannot be stored (kWh per interval)
     curtailment_kwh = np.zeros_like(generation_profiles_kwh)
 
+    # --- Simulation Loop --------------------
+    # Interval-by-interval energy balancing for each prosumer
     for t in range(num_intervals):
         for i in range(num_prosumers):
+            # Net energy balance before battery interaction
             net_energy = generation_profiles_kwh[i, t] - load_profiles_kwh[i, t]
+            # Default: carry battery SoC forward
             battery_soc_kwh[i, t + 1] = battery_soc_kwh[i, t]
 
             if net_energy > 0:
+                # Surplus generation: attempt to charge battery
                 to_store = min(net_energy, config.BATTERY_CAPACITY_KWH - battery_soc_kwh[i, t + 1])
                 battery_soc_kwh[i, t + 1] += to_store
+                # Any remaining surplus is curtailed
                 curtailment_kwh[i, t] = net_energy - to_store
             else:
+                # Deficit: discharge battery first, then import remainder from grid
                 from_battery = min(abs(net_energy), battery_soc_kwh[i, t + 1])
                 battery_soc_kwh[i, t + 1] -= from_battery
                 grid_imports_kwh[i, t] = abs(net_energy) - from_battery
 
-        # Consumers import directly from grid
+         # Consumers (non-prosumers) import entire load from the grid
         grid_imports_kwh[num_prosumers:, t] = load_profiles_kwh[num_prosumers:, t]
 
     print("Simulation complete.")
+    # Return all time-series needed for metrics and plotting
     return {
         "load_kwh": load_profiles_kwh,
         "generation_kwh": generation_profiles_kwh,
@@ -83,7 +137,8 @@ def run_s1_simulation():
         "battery_soc_kwh": battery_soc_kwh,
     }
 
-
+# ----------Summary Reporting-----------------
+# Computes aggregate, per-agent, and fairness metrics and prints them in a structured, thesis-aligned format.
 def print_summary_report(results):
     """
     Calculates and prints a comprehensive summary of the S1 model metrics,
@@ -105,7 +160,7 @@ def print_summary_report(results):
     num_prosumers = int(config.TOTAL_HOUSEHOLDS * config.PROSUMER_SHARE)
     num_consumers = int(config.TOTAL_HOUSEHOLDS - num_prosumers)
 
-    # Prosumer calculations
+    # Prosumer averages
     if num_prosumers > 0:
         total_prosumer_imports_kwh = float(np.sum(results["imports_kwh"][:num_prosumers, :]))
         total_prosumer_generation_kwh = float(np.sum(results["generation_kwh"][:num_prosumers, :]))
@@ -115,7 +170,7 @@ def print_summary_report(results):
     else:
         avg_import_per_prosumer = avg_gen_per_prosumer = avg_cost_per_prosumer = 0.0
 
-    # Consumer calculations
+    # Consumer averages
     if num_consumers > 0:
         total_consumer_imports_kwh = float(np.sum(results["imports_kwh"][num_prosumers:, :]))
         avg_import_per_consumer = total_consumer_imports_kwh / num_consumers
@@ -123,20 +178,19 @@ def print_summary_report(results):
     else:
         avg_import_per_consumer = avg_cost_per_consumer = 0.0
 
-    # --- Fairness Metrics (Aligned with S3 definitions) ---
+    # --- Fairness Metrics---
     utility_costs_per_household = np.sum(results["imports_kwh"], axis=1) * float(config.UTILITY_TARIFF)
 
     # P2P benefits are zero by definition in S1
+    # In S1 there are no P2P benefits, all households only incur utility costs
     p2p_benefits_per_household = np.zeros(int(config.TOTAL_HOUSEHOLDS), dtype=float)
-
-    # Net outcomes: P2P benefits - utility costs (negative for everyone in S1)
     net_outcomes_per_household = p2p_benefits_per_household - utility_costs_per_household
 
     gini_p2p_benefits = 0.0
     gini_utility_costs = float(common.calculate_gini_index(utility_costs_per_household)) if np.sum(utility_costs_per_household) > 0 else 0.0
     gini_net_outcomes = gini_shift_allow_negative(net_outcomes_per_household)
 
-    # --- 5. Print Formatted Report ---
+    # --- 5. Print Report ---
     print("\n" + "=" * 50)
     print("--- S1 Baseline Model: Key Metrics Summary ---")
     print("=" * 50)
@@ -171,7 +225,8 @@ def print_summary_report(results):
 
     print("\n" + "=" * 50)
 
-
+#-------------Visualisation Functions--------------
+# All plotting functions save figures to disk for inclusion in the report.
 def plot_aggregate_summary_bars(results):
     """
     Generates a bar chart of the total energy flows for the entire simulation.
