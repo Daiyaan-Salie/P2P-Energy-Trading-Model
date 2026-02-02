@@ -1,13 +1,36 @@
-# S2_Community_Market_Model_Detailed.py
+#Model S2: Community Energy Market (CEM / Pool Model)
 #
-# This script simulates the S2 Scenario: A Community Energy Market (CEM) or "Pool" model.
-# The output report is enhanced to include a detailed per-agent breakdown for
-# direct comparison with the S1 baseline model.
+# Purpose:
+# --------
+# This script implements the S2 scenario, where households participate in a
+# community-level peer-to-peer (P2P) energy market.
 #
-# UPDATED FOR 24-HOUR NORMALISED HORIZON:
-# - Uses config.NUM_INTERVALS (96 = 24 hours)
-# - Plots now safely clip windows to available intervals (no 7-day assumptions)
-# - "Week" titles adapt to "Day" when horizon <= 7 days
+# Key characteristics of S2:
+# - Prosumers may sell surplus energy to consumers via a pooled market
+# - A uniform market-clearing price (MCP) is used
+# - No feeder capacity constraints are enforced (unconstrained network)
+# - Batteries are operated locally before participation in the P2P market
+#
+# Role in the thesis/report:
+# --------------------------
+# - Represents the first P2P-enabled scenario
+# - Provides a comparison between:
+#     * S1: utility-only baseline
+#     * S2: unconstrained community market
+# - Used to analyse welfare gains, fairness impacts, and grid effects
+#
+# Key assumptions:
+# ----------------
+# - Time resolution: 15-minute intervals (NUM_INTERVALS = 96 for 24 hours)
+# - Energy units: kWh per interval
+# - Power units (for plots): kW (converted using ×4)
+# - Batteries are prioritised for self-consumption before market participation
+#
+# Outputs:
+# --------
+# - Printed summary metrics to console
+# - PNG figures saved to disk (power flow, benefits, grid impact, battery SoC)
+# =============================================================================
 
 import numpy as np
 import pandas as pd
@@ -18,8 +41,12 @@ import Common_Functions as common
 
 
 # -----------------------------
-# Helpers
-# -----------------------------
+# Helper functions
+# -------------------------------------------------------------------------
+
+# Gini helper that supports negative values.
+# This is required because net outcomes (P2P benefit − grid cost) may be negative for some households. The shifting preserves inequality structure
+# while allowing a valid Gini calculation.
 
 def _gini_allow_neg(values: np.ndarray) -> float:
     """
@@ -37,18 +64,14 @@ def _gini_allow_neg(values: np.ndarray) -> float:
         return 0.0
     return float(common.calculate_gini_index(v))
 
-
+# Builds a per-household vector of total P2P benefits.
+# Consumers receive consumer surplus, prosumers receive trading profit.
+# Households that do not trade retain a benefit of zero.
 def _build_household_p2p_benefits(
     total_households: int,
     consumer_surplus: pd.Series,
     prosumer_profit: pd.Series,
 ) -> np.ndarray:
-    """
-    Builds a length-N vector of total P2P benefit per household:
-      - Consumers: consumer surplus
-      - Prosumers: prosumer profit
-    Includes households that did not trade (benefit = 0).
-    """
     benefits = np.zeros(int(total_households), dtype=float)
 
     if consumer_surplus is not None and len(consumer_surplus) > 0:
@@ -65,7 +88,9 @@ def _build_household_p2p_benefits(
 
     return benefits
 
-
+# Helper for defining plotting windows.
+# Maintains backward compatibility with "weekly" plots, but safely clamps
+# to the available simulation horizon (e.g., 1-day runs).
 def _plot_window_bounds(week_to_plot: int, intervals_per_day: int = 96):
     """
     Returns (start, end, label) for a plotting window.
@@ -81,13 +106,13 @@ def _plot_window_bounds(week_to_plot: int, intervals_per_day: int = 96):
     start = max(0, min(start, num_intervals))
     end = max(0, min(end, num_intervals))
 
-    # Label: if horizon <= 7 days, treat window as "Day"
+    # Label adapts to short horizons
     if num_intervals <= intervals_per_week:
         label = f"Day {week_to_plot}"
     else:
         label = f"Week {week_to_plot}"
 
-    # If start==end (e.g., user asked for week 2 but only 1 day exists), fall back to full horizon
+    # Fallback if requested window is empty
     if start == end:
         start = 0
         end = num_intervals
@@ -96,13 +121,12 @@ def _plot_window_bounds(week_to_plot: int, intervals_per_day: int = 96):
 
 
 # -----------------------------
-# Simulation
+# S2 Simulation
 # -----------------------------
+# Executes the physical energy dispatch and market clearing logic for the
+# community energy market.
 
 def run_s2_simulation():
-    """
-    Executes the S2 Community Energy Market simulation.
-    """
     print("--- Running S2: Community Energy Market Model ---")
 
     # --- 1. Setup & Data Generation ---
@@ -113,43 +137,50 @@ def run_s2_simulation():
 
     load_profiles_kwh = common.generate_household_profiles(num_households, num_intervals)
     pv_profiles_kwh = common.generate_pv_profiles(num_prosumers, num_intervals, config.PEAK_PV_GENERATION_KW)
+    
+    # Align PV generation with household indexing
     generation_profiles_kwh = np.zeros_like(load_profiles_kwh)
     generation_profiles_kwh[:num_prosumers, :] = pv_profiles_kwh
 
-    # --- 2. Simulation Initialization ---
+    # --- 2. State Initialisation -------
     battery_soc_kwh = np.zeros((num_prosumers, num_intervals + 1))
     battery_soc_kwh[:, 0] = float(config.BATTERY_CAPACITY_KWH) * 0.5
     grid_imports_kwh = np.zeros_like(load_profiles_kwh)
     curtailment_kwh = np.zeros_like(generation_profiles_kwh)
+
+    # Trade log records interval-level bilateral allocations
     trade_log = []
 
     # --- 3. Simulation Loop ---
     for t in range(num_intervals):
+        # Net energy before battery and market interaction
         net_energy_kwh = generation_profiles_kwh[:, t] - load_profiles_kwh[:, t]
+        # Carry battery state forward
         battery_soc_kwh[:, t + 1] = battery_soc_kwh[:, t]
 
-        # Discharge batteries first for prosumers to cover deficits (self-consumption priority)
+        # Step 1: Discharge batteries to cover deficits (self-consumption priority)
         for i in range(num_prosumers):
             if net_energy_kwh[i] < 0:
                 from_battery = min(abs(net_energy_kwh[i]), battery_soc_kwh[i, t + 1])
                 battery_soc_kwh[i, t + 1] -= from_battery
                 net_energy_kwh[i] += from_battery
 
-        # Charge batteries next for prosumers during PV surplus BEFORE offering any energy to the P2P market.
-        # This aligns S2 physical dispatch with S1: local storage is prioritised over exporting to the market.
+        # Step 2: Charge batteries using surplus PV before market participation
+        # This aligns S2 dispatch with S1 behaviour.
         for i in range(num_prosumers):
             if net_energy_kwh[i] > 0:
                 available_capacity = float(config.BATTERY_CAPACITY_KWH) - battery_soc_kwh[i, t + 1]
                 to_store = min(net_energy_kwh[i], max(0.0, available_capacity))
                 battery_soc_kwh[i, t + 1] += to_store
-                net_energy_kwh[i] -= to_store  # remaining surplus (if any) is eligible to sell
+                net_energy_kwh[i] -= to_store
 
-        # Remaining surplus/deficit forms the P2P market offers/bids
+        # Step 3: Form P2P market offers (sellers) and bids (buyers)
         sellers = {i: net_energy_kwh[i] for i in range(num_prosumers) if net_energy_kwh[i] > 0}
         buyers = {i: abs(net_energy_kwh[i]) for i in range(num_households) if net_energy_kwh[i] < 0}
         total_supply_kwh = float(sum(sellers.values()))
         total_demand_kwh = float(sum(buyers.values()))
 
+        # Step 4: Market clearing (uniform MCP, pro-rata allocation)
         if total_supply_kwh > 0 and total_demand_kwh > 0:
             mcp = common.uniform_mcp(config.PRICE_FLOOR, config.UTILITY_TARIFF)
             p2p_trade_volume_kwh = min(total_supply_kwh, total_demand_kwh)
@@ -158,7 +189,7 @@ def run_s2_simulation():
                 for buyer_id, demand in buyers.items():
                     traded_amount = (demand / total_demand_kwh) * p2p_trade_volume_kwh
 
-                    # Allocate the buyer's traded amount across sellers (pro-rata)
+                    # Allocate buyer demand across all sellers proportionally
                     for seller_id, supply in sellers.items():
                         if supply > 0:
                             from_seller = (supply / total_supply_kwh) * traded_amount
@@ -174,17 +205,17 @@ def run_s2_simulation():
 
                     net_energy_kwh[buyer_id] += traded_amount
 
-                # Reduce seller net energy by sold amount
+               # Reduce sellers' surplus by sold energy
                 for seller_id in sellers.keys():
                     net_energy_kwh[seller_id] -= (sellers[seller_id] / total_supply_kwh) * p2p_trade_volume_kwh
 
-        # Any remaining surplus after market clearing is curtailed (battery already prioritised pre-market)
+        # Step 5: Curtail remaining surplus
         for i in range(num_prosumers):
             if net_energy_kwh[i] > 0:
                 curtailment_kwh[i, t] = net_energy_kwh[i]
                 net_energy_kwh[i] = 0.0
 
-        # Remaining deficits import from grid
+        # Step 6: Import remaining deficits from grid
         for i in range(num_households):
             if net_energy_kwh[i] < 0:
                 grid_imports_kwh[i, t] = abs(net_energy_kwh[i])
@@ -209,6 +240,7 @@ def run_s2_simulation():
 # -----------------------------
 # Reporting
 # -----------------------------
+# Computes economic, fairness, and technical metrics aligned with S3 definitions.# Computes economic, fairness, and technical metrics aligned with S3 definitions.
 
 def print_s2_summary_report(results):
     """
