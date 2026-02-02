@@ -226,11 +226,21 @@ def print_summary_report(results):
     print("\n" + "=" * 50)
 
 #-------------Visualisation Functions--------------
-# All plotting functions save figures to disk for inclusion in the report.
+# All plotting functions save figures to the folder.
+
+
+# Visualisation 1: Aggregate Energy Summary Bars
+# -------------------------------------------------------------------------
+# Purpose:
+# - Gives a quick “energy accounting” overview for the whole simulation horizon.
+# - Useful for validating that generation/imports/curtailment behave as expected.
+# Output:
+# - Saves: S1_aggregate_summary.png
 def plot_aggregate_summary_bars(results):
     """
     Generates a bar chart of the total energy flows for the entire simulation.
     """
+    # Aggregate totals across all households and all intervals (kWh)
     total_load = float(np.sum(results["load_kwh"]))
     total_gen = float(np.sum(results["generation_kwh"]))
     total_imports = float(np.sum(results["imports_kwh"]))
@@ -239,18 +249,21 @@ def plot_aggregate_summary_bars(results):
     labels = ["Total Load", "Local Generation", "Grid Imports", "Energy Curtailed"]
     values = [total_load, total_gen, total_imports, total_curtailment]
 
+    # Plot style chosen for report-ready visual appearance
     plt.style.use("seaborn-v0_8-whitegrid")
     fig, ax = plt.subplots(figsize=(10, 6))
     bars = ax.bar(labels, values, color=["#1f77b4", "#2ca02c", "#ff7f0e", "#d62728"])
     ax.set_ylabel("Energy (kWh)")
     ax.set_title("S1 Baseline: Total Energy Flows Over Simulation Period", fontsize=16)
 
+    # Formatting: show clean numeric labels and annotate each bar
     ax.yaxis.set_major_formatter(mticker.StrMethodFormatter("{x:,.0f}"))
     ax.bar_label(bars, fmt="{:,.0f} kWh", padding=3)
 
     plt.tight_layout()
     plt.savefig("S1_aggregate_summary.png")
     print("Saved 'S1_aggregate_summary.png'")
+
 
 
 def _plot_window_bounds(week_to_plot: int, intervals_per_day: int) -> tuple[int, int, str]:
@@ -281,7 +294,14 @@ def _plot_window_bounds(week_to_plot: int, intervals_per_day: int) -> tuple[int,
 
     return start, end, label
 
-
+# Visualisation 2: Community Power Flow
+# -------------------------------------------------------------------------
+# Purpose:
+# - Shows how the community load is met across time (self-consumption vs grid).
+# - Converts kWh/interval -> kW using ×4 for a 15-minute interval.
+# - Includes curtailed energy as a dashed line for visibility.
+# Output:
+# - Saves: S1_community_power_flow.png
 
 def plot_community_power_flow(results, week_to_plot=1):
     """
@@ -300,15 +320,17 @@ def plot_community_power_flow(results, week_to_plot=1):
     start_interval = max(0, min(start_interval, num_intervals))
     end_interval = max(start_interval, min(end_interval, num_intervals))
 
-    # If a 1-day run (96 intervals), this will naturally plot the full day
+    # Convert energy (kWh per interval) into average power (kW) for plotting:
+    # 15 minutes = 0.25 hours => kW = kWh / 0.25 = kWh * 4
     agg_load_kw = np.sum(results["load_kwh"], axis=0)[start_interval:end_interval] * 4
     agg_imports_kw = np.sum(results["imports_kwh"], axis=0)[start_interval:end_interval] * 4
     agg_gen_kw = np.sum(results["generation_kwh"], axis=0)[start_interval:end_interval] * 4
     agg_curtailment_kw = np.sum(results["curtailment_kwh"], axis=0)[start_interval:end_interval] * 4
 
+    # Self-consumed PV is bounded by whichever is smaller: load or generation
     self_consumed_kw = np.minimum(agg_load_kw, agg_gen_kw)
 
-    # --- NEW X-AXIS: Time of Day labels like Average Daily Power Transfer ---
+    # X-axis uses HH:MM labels to match other report figures
     time_of_day = pd.to_datetime(
         pd.date_range(start="00:00", periods=len(agg_load_kw), freq="15min")
     ).strftime("%H:%M")
@@ -316,6 +338,7 @@ def plot_community_power_flow(results, week_to_plot=1):
     plt.style.use("seaborn-v0_8-whitegrid")
     fig, ax = plt.subplots(figsize=(15, 7))
 
+    # Stacked areas show composition of supply to meet demand
     ax.stackplot(
         time_of_day,
         self_consumed_kw,
@@ -325,6 +348,7 @@ def plot_community_power_flow(results, week_to_plot=1):
         alpha=0.7,
     )
 
+    # Overlay load curve and curtailed energy for additional interpretation
     ax.plot(time_of_day, agg_load_kw, label="Total Community Load", color="black", linewidth=2)
     ax.plot(time_of_day, agg_curtailment_kw, label="Energy Curtailed", color="#d62728", linestyle="--")
 
@@ -334,17 +358,27 @@ def plot_community_power_flow(results, week_to_plot=1):
     ax.legend(loc="upper left")
     ax.grid(True)
 
-    # Match your Average Daily Power Transfer tick density
+    # Tick spacing: every 2 hours (8 × 15-minute intervals)
     ax.xaxis.set_major_locator(mticker.MultipleLocator(8))  # every 2 hours
 
     plt.tight_layout()
     plt.savefig("S1_community_power_flow.png")
     print("Saved 'S1_community_power_flow.png'")
 
+# Visualisation 3: Average Battery State of Charge (SoC)
+# -------------------------------------------------------------------------
+# Purpose:
+# - Shows how prosumer batteries are being used throughout the day.
+# - Uses SoC percentage to make interpretation easy.
+# Note:
+# - battery_soc_kwh has length NUM_INTERVALS + 1 (includes initial state).
+# - Plot drops the last point to avoid 24:00 formatting wrapping to 00:00.
+# Output:
+# - Saves: S1_average_battery_soc.png
 def plot_average_battery_soc(results, week_to_plot=1):
     """
     Generates a line plot of the average prosumer battery state of charge.
-    FIXED: Uses 96 points (not 97) so the x-axis doesn't wrap 24:00 -> 00:00.
+    Uses 96 points (not 97), so the x-axis doesn't wrap 24:00 -> 00:00.
     X-axis matches Average Daily Power Transfer (Time of Day: HH:MM).
     """
     intervals_per_day = 96
@@ -353,7 +387,7 @@ def plot_average_battery_soc(results, week_to_plot=1):
     avg_soc_kwh_full = np.mean(results["battery_soc_kwh"], axis=0)
     avg_soc_pct_full = (avg_soc_kwh_full / config.BATTERY_CAPACITY_KWH) * 100.0
 
-    # ✅ Use 96 points only (drop the final "24:00" point that formats to "00:00")
+    # Use 96 points only (drop the final "24:00" point that formats to "00:00")
     avg_soc_pct = avg_soc_pct_full[:-1]  # length = NUM_INTERVALS (96 for 1-day)
 
     # Keep backward compatibility with week_to_plot, but clamp safely
@@ -395,7 +429,17 @@ def plot_average_battery_soc(results, week_to_plot=1):
     print("Saved 'S1_average_battery_soc.png'")
 
 
-
+# Visualisation 4: Average Daily Power Transfer
+# -------------------------------------------------------------------------
+# Purpose:
+# - Produces a consolidated “typical day” profile for community flows.
+# - If the simulation horizon is exactly 24 hours (96 intervals),
+#   this becomes the actual day profile.
+# Includes:
+# - Load, PV generation, grid imports
+# - Battery charging/discharging inferred from SoC differences
+# Output:
+# - Saves: S1_average_daily_power_transfer.png
 def plot_average_daily_power_transfer(results):
     """
     Generates a line plot showing the average 24-hour power flows.
@@ -415,9 +459,11 @@ def plot_average_daily_power_transfer(results):
     total_gen_kwh = np.sum(results["generation_kwh"], axis=0)
     total_imports_kwh = np.sum(results["imports_kwh"], axis=0)
 
+    # Battery community SoC and delta to estimate charge/discharge per interval
     total_battery_soc_kwh = np.sum(results["battery_soc_kwh"], axis=0)
     battery_delta_kwh = np.diff(total_battery_soc_kwh)
 
+    # Positive deltas = charging energy; negative deltas = discharging energy
     battery_charge_kwh = np.maximum(0, battery_delta_kwh)
     battery_discharge_kwh = np.maximum(0, -battery_delta_kwh)
 
@@ -429,6 +475,7 @@ def plot_average_daily_power_transfer(results):
     battery_charge_kwh = battery_charge_kwh[:full_len]
     battery_discharge_kwh = battery_discharge_kwh[:full_len]
 
+    # Convert kWh/interval to kW for plotting (×4 for 15-minute intervals)
     avg_load_kw = np.mean(total_load_kwh.reshape(num_days, intervals_per_day), axis=0) * 4
     avg_gen_kw = np.mean(total_gen_kwh.reshape(num_days, intervals_per_day), axis=0) * 4
     avg_imports_kw = np.mean(total_imports_kwh.reshape(num_days, intervals_per_day), axis=0) * 4
@@ -459,6 +506,13 @@ def plot_average_daily_power_transfer(results):
     plt.savefig("S1_average_daily_power_transfer.png")
     print("Saved 'S1_average_daily_power_transfer.png'")
 
+
+# Script Entry Point
+# -------------------------------------------------------------------------
+# Execution order for reproducibility:
+# 1) Run S1 simulation and return time-series results
+# 2) Print summary metrics (baseline reference numbers)
+# 3) Generate and save report figures
 
 if __name__ == "__main__":
     s1_results = run_s1_simulation()
