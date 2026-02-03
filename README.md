@@ -1,4 +1,4 @@
-# S3 Local Energy Market  
+# S3 Local Energy Market
 **End-to-End Execution Guide**
 
 This guide describes the complete, reproducible execution pipeline for the **S3 Local Energy Market** system — from smart-contract compilation through on-chain settlement and results generation.
@@ -12,20 +12,20 @@ It is intended for **external examiners** and assumes no prior knowledge of the 
 The system consists of **three major phases**, executed sequentially:
 
 ### 1. On-Chain Infrastructure Setup
-- Smart-contract compilation  
-- Asset creation  
-- Application deployment  
-- Market initialization  
+- Smart-contract compilation
+- Asset creation
+- Application deployment
+- Market initialization
 
 ### 2. Off-Chain Market Scheduling
-- Oracle-based interval planning  
-- Trade matching  
+- Oracle-based interval planning
+- Trade matching
 
 ### 3. On-Chain Execution and Evaluation
-- Settlement replay on Algorand  
-- Result aggregation and figure generation  
+- Settlement replay on Algorand
+- Result aggregation and figure generation
 
-Each phase is executed by a **dedicated Python script**.  
+Each phase is executed by a **dedicated Python script**.
 Scripts **do not import each other**, so they **must be run in the correct order**.
 
 ---
@@ -33,9 +33,9 @@ Scripts **do not import each other**, so they **must be run in the correct order
 ## Repository Requirements
 
 ### Required Files (Working Directory)
-- All `S3_*.py` scripts  
-- `config.py`  
-- `Common_Functions.py`  
+- All `S3_*.py` scripts
+- `config.py`
+- `Common_Functions.py`
 - `.env` (created by the user)
 
 ### Python Dependencies
@@ -60,178 +60,226 @@ ALGOD_TOKEN=...
 COORDINATOR_MNEMONIC=...
 ```
 
-4. Step-by-Step Execution
+Additional keys will be added as the pipeline progresses.
 
-Step 1 — Compile the Smart Contract (PyTeal → TEAL + ABI)
-Purpose:
+---
+
+## Step-by-Step Execution
+
+### Step 1 — Compile the Smart Contract (PyTeal → TEAL + ABI)
+
+**Purpose**  
 Generates the Algorand smart-contract artifacts required for deployment.
 
-Command:
+**Command**
+```bash
 python3 S3_pyteal_dex.py
+```
 
+**Expected Outputs**
+- `approval_rev5.teal`
+- `clear_rev5.teal`
+- `abi_rev5.json`
 
-Expected outputs
-    - approval_rev5.teal
-    - clear_rev5.teal
-    - abi_rev5.json
-
-What this demonstrates
+**What This Demonstrates**  
 The market logic is formally defined in PyTeal and compiled deterministically.
 
+---
 
-Step 2 — Create the Energy Market Assets (ASAs)
-Purpose:
+### Step 2 — Create the Energy Market Assets (ASAs)
+
+**Purpose**  
 Creates the fungible assets used in the market (currency and energy units).
 
-Command
+**Command**
+```bash
 python3 S3_create_assets.py
+```
 
-Expected console output
-Prints:
+**Expected Console Output**
+```
 ZAR_ASA_ID=...
 KWH_ASA_ID=...
+```
 
-Required action
-Add the printed values to .env:
+**Required Action**  
+Add the printed values to `.env`:
+```env
 ZAR_ASA_ID=...
 KWH_ASA_ID=...
+```
 
-What this demonstrates
+**What This Demonstrates**  
 The market operates using native Algorand Standard Assets.
 
+---
 
-Step 3 — Deploy the Smart Contract Application
-Purpose
+### Step 3 — Deploy the Smart Contract Application
+
+**Purpose**  
 Deploys the decentralized exchange (DEX) application on Algorand.
 
-Command
+**Command**
+```bash
 python3 S3_deploy_contract.py
+```
 
-Expected console output
-Prints:
+**Expected Console Output**
+```
 DEX_APP_ID=...
-Reminder to set DEX_ABI_PATH
+```
+Reminder to set `DEX_ABI_PATH`.
 
-Required action
-Update .env:
+**Required Action**
+```env
 DEX_APP_ID=...
 DEX_ABI_PATH=abi_rev5.json
+```
 
-What this demonstrates
+**What This Demonstrates**  
 The compiled contract is live on-chain and addressable.
 
+---
 
-Step 4 — Verify Deployer Address and Opt-Ins (Recommended)
-Purpose
+### Step 4 — Verify Deployer Address and Opt-Ins (Recommended)
+
+**Purpose**  
 Ensures the coordinator account is correctly configured.
 
-Command
+**Command**
+```bash
 python3 S3_deployer_address.py
+```
 
-Checks performed
-    - Coordinator address derivation
-    - ALGO balance
-    - Asset opt-ins for ZAR and KWH
-    - Verifies coordinator is the application creator
+**Checks Performed**
+- Coordinator address derivation
+- ALGO balance
+- Asset opt-ins for ZAR and KWH
+- Verification that the coordinator is the application creator
 
-What this demonstrates
+**What This Demonstrates**  
 Administrative permissions are correctly enforced.
 
+---
 
-Step 5 — Create and Fund Participant Accounts
-Purpose
+### Step 5 — Create and Fund Participant Accounts
+
+**Purpose**  
 Creates the cohort of consumers and prosumers used in the experiment.
 
-Command
+**Command**
+```bash
 python3 S3_user_onboarding.py
+```
 
-Expected output
-cohort.json containing:
-    - Participant addresses
-    - Roles (consumer / prosumer)
-    - Mnemonics (for controlled local testing)
+**Expected Output**  
+`cohort.json` containing:
+- Participant addresses
+- Roles (consumer / prosumer)
+- Mnemonics (for controlled local testing)
 
-What this demonstrates
+**What This Demonstrates**  
 The system supports heterogeneous participant roles.
 
+---
 
-Step 6 — Initialize the Market State On-Chain
-Purpose
+### Step 6 — Initialize the Market State On-Chain
+
+**Purpose**  
 Performs the one-time market setup transaction.
 
-Command
+**Command**
+```bash
 python3 S3_setup_market.py
+```
 
-Dependencies
-Uses parameters from config.py
-Requires DEX_APP_ID, ZAR_ASA_ID, KWH_ASA_ID
+**Dependencies**
+- Parameters from `config.py`
+- `DEX_APP_ID`
+- `ZAR_ASA_ID`
+- `KWH_ASA_ID`
 
-Expected output
-Successful application call confirmation
+**Expected Output**  
+Successful application call confirmation.
 
-What this demonstrates
+**What This Demonstrates**  
 Market rules and constraints are committed on-chain.
 
+---
 
-Step 7 — Generate Oracle Schedule (Off-Chain)
-Purpose
+### Step 7 — Generate Oracle Schedule (Off-Chain)
+
+**Purpose**  
 Computes the interval-by-interval trading schedule using an oracle model.
 
-Command (example)
+**Command (example)**
+```bash
 python3 S3_Oracle_Generate_Schedule.py --participants participants.csv
+```
 
-Expected outputs
+**Expected Outputs**  
 Creates a directory:
+```
 runs/<timestamp>/
-
+```
 
 Containing:
-    - interval_inputs.csv
-    - planned_trades.csv
-    - oracle_meta.json
-    - battery_timeseries.csv
+- `interval_inputs.csv`
+- `planned_trades.csv`
+- `oracle_meta.json`
+- `battery_timeseries.csv`
 
-What this demonstrates
+**What This Demonstrates**  
 Market clearing is performed off-chain for efficiency.
 
+---
 
-Step 8 — Replay Settlement On-Chain
-Purpose
+### Step 8 — Replay Settlement On-Chain
+
+**Purpose**  
 Executes the oracle-generated schedule on Algorand.
 
-Command
-python3 S3_Onchain_Settle_From_Schedule.py --run-dir runs/<timestamp>
+**Command**
+```bash
+python3 S3_Onchain_Settle_From_Schedule.py --run-dir runs/<timestamp>/
+```
 
-Expected outputs
-    - interval_summary.csv
-    - trade_log.csv
-    - settlement_meta.json
+**Expected Outputs**
+- `interval_summary.csv`
+- `trade_log.csv`
+- `settlement_meta.json`
 
-What this demonstrates
+**What This Demonstrates**  
 Deterministic replay of off-chain decisions on-chain.
 
+---
 
-Step 9 — Generate Results and Figures
-Purpose
+### Step 9 — Generate Results and Figures
+
+**Purpose**  
 Produces performance metrics, fairness analysis, and plots.
 
-Command
-python3 S3_Results_And_Figures.py --in-dir runs/<timestamp>
+**Command**
+```bash
+python3 S3_Results_And_Figures.py --in-dir runs/<timestamp>/
+```
 
-Inputs
-    - Oracle outputs
-    - Settlement outputs
-    - Participant metadata
+**Inputs**
+- Oracle outputs
+- Settlement outputs
+- Participant metadata
 
-What this demonstrates
+**What This Demonstrates**  
 End-to-end evaluation of the market mechanism.
 
+---
 
-5. Verification Checklist for Examiners
+## Verification Checklist for Examiners
+
 An execution is considered successful if:
-    - TEAL and ABI files are generated (Step 1)
-    - Asset IDs and App ID are recorded in .env
-    - Market setup transaction succeeds
-    - Oracle run folder exists with CSV outputs
-    - Settlement CSVs are produced
-    - Results script completes without error
+- TEAL and ABI files are generated (Step 1)
+- Asset IDs and App ID are recorded in `.env`
+- Market setup transaction succeeds
+- Oracle run folder exists with CSV outputs
+- Settlement CSVs are produced
+- Results script completes without error
