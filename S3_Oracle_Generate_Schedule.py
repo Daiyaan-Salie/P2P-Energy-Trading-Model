@@ -1,37 +1,59 @@
-"""
-5.7 - S3c_Oracle_Generate_Schedule_Rev1.py  (UPDATED: Battery-Integrated Oracle)
-
-Oracle stage (off-chain):
-- Generate synthetic household load + PV profiles (from Common_Functions.py)
-- Simulate prosumer battery SoC (deterministic) to transform raw PV/load into:
-    - market supply (post-battery)
-    - market demand (post-battery)
-- Compute interval total supply/demand in internal units qty_u (0.01 kWh units)
-- Create a deterministic planned trade schedule (seller->buyer, qty_u_planned)
-- Write CSV outputs for on-chain settlement replay (used by Script 5.8)
-
-LOCKED ASSUMPTIONS (by design, to avoid silent inconsistencies):
-- 15-minute resolution
-- 96 intervals per day
-- Common_Functions profiles are already kWh per 15-minute interval
-
-Inputs:
-- participants.csv with columns: addr, role
-    role in {"prosumer", "consumer"} (case-insensitive)
-
-Outputs (in runs/<timestamp>[_<run-name>]/):
-- participants.csv (copied)
-- interval_inputs.csv        REQUIRED cols: interval, total_supply_u, total_demand_u, planned_clear_u
-                           + EXTRA cols (safe for Script 5.8 to ignore)
-- planned_trades.csv         columns: interval, seller_addr, buyer_addr, qty_u_planned
-- battery_timeseries.csv     columns: interval, avg_soc_pct, charge_u, discharge_u, curtail_u, utility_export_u, etc.
-- oracle_meta.json           hashes + run params + validation summary
-
-Notes:
-- This script DOES NOT apply feeder cap. Cap enforcement occurs on-chain via allowed_u.
-- Planned trades clear up to planned_clear_u = min(total_supply_u, total_demand_u) per interval.
-- qty_u is integer 0.01 kWh units (qty_u = floor(kWh * 100)).
-"""
+# =============================================================================
+# Model S3: Oracle Schedule Generator (Rev1)
+#
+# Purpose:
+# --------
+# This script performs the **off-chain Oracle stage** for Model S3.
+# It generates a deterministic day-ahead "planned trade schedule" that is later
+# replayed on-chain by the settlement script (Script 5.8).
+#
+# Core responsibilities:
+# ----------------------
+# 1) Generate synthetic household load profiles for all participants
+# 2) Generate synthetic PV profiles for prosumers only
+# 3) Apply a deterministic battery model (Option A) for prosumers:
+#       - Pre-trade: discharge deficits; charge surplus up to SoC threshold (e.g., 90%)
+#       - Post-trade: charge remaining surplus to full; export excess to utility
+# 4) Convert post-battery surplus/deficit into qty_u units (0.01 kWh integers)
+# 5) Create deterministic planned trades per interval:
+#       - Clear up to planned_clear_u = min(total_supply_u, total_demand_u)
+#       - Allocate seller->buyer trades deterministically
+# 6) Write CSV outputs + hashes for reproducibility and audit:
+#       - interval_inputs.csv
+#       - planned_trades.csv
+#       - battery_timeseries.csv
+#       - oracle_meta.json
+#
+# LOCKED ASSUMPTIONS (by design):
+# -------------------------------
+# - 15-minute resolution
+# - 96 intervals/day
+# - Common_Functions profiles are already in kWh per 15-minute interval
+#
+# IMPORTANT:
+# ----------
+# - This script does NOT apply feeder cap. Feeder cap is enforced on-chain via
+#   allowed_u, and is authoritative during settlement.
+# - qty_u is integer 0.01 kWh units. This avoids floating-point ambiguity.
+# - Determinism is critical: sorting + stable rounding ensures identical schedules
+#   for the same inputs/seed.
+#
+# Inputs:
+# -------
+# - participants.csv with columns:
+#     addr, role
+#   where role ∈ {"prosumer", "consumer"} (case-insensitive)
+#
+# Outputs (in runs/<timestamp>[_<run-name>]/):
+# ------------------------------------------
+# - participants.csv           (copied for provenance)
+# - interval_inputs.csv        required cols: interval,total_supply_u,total_demand_u,planned_clear_u
+#                             + extra cols (safe for on-chain replay script to ignore)
+# - planned_trades.csv         interval,seller_addr,buyer_addr,qty_u_planned
+# - battery_timeseries.csv     interval,avg_soc_pct,charge_u,discharge_u,utility_export_u,...
+# - oracle_meta.json           run params + file hashes + validation summary
+#
+# =============================================================================
 
 from __future__ import annotations
 
@@ -74,6 +96,7 @@ def _timestamp_folder() -> str:
 
 
 def _ensure_dir(p: Path) -> None:
+    """Create output directory if it doesn't already exist."""
     p.mkdir(parents=True, exist_ok=True)
 
 
@@ -86,6 +109,17 @@ def _sha256_file(path: Path) -> str:
 
 
 def _read_participants_csv(path: Path) -> List[Participant]:
+ """
+    Load participants from CSV.
+
+    Required columns:
+      - addr
+      - role (prosumer/consumer)
+
+    Returns:
+        List[Participant]
+    """
+    
     if not path.exists():
         raise FileNotFoundError(
             f"participants.csv not found at: {path}\n"
@@ -119,8 +153,15 @@ def _read_participants_csv(path: Path) -> List[Participant]:
 
 def _kwh_to_qty_u(energy_kwh: np.ndarray) -> np.ndarray:
     """
-    Convert kWh per interval to qty_u integer units (0.01 kWh).
-    qty_u = floor(kWh * 100)
+    Convert kWh per interval -> qty_u integer units (0.01 kWh).
+
+    Convention:
+      qty_u = floor(kWh * 100)
+
+    Why floor?
+    ----------
+    - Ensures we never over-allocate energy due to float rounding.
+    - Keeps settlement conservative and consistent with on-chain integer logic.
     """
     u = np.floor(energy_kwh * 100.0 + 1e-12).astype(np.int64)
     u[u < 0] = 0
@@ -142,11 +183,15 @@ def _allocate_planned_trades_deterministic(
     """
     Deterministic allocation of clear_u units from sellers to buyers.
 
-    Strategy:
-    - Sort sellers and buyers lexicographically (stable)
-    - Allocate seller supply across buyers proportionally to remaining demand,
-      using largest-remainder rounding for exact integer conservation.
-    - Includes a deterministic "top-up" pass to correct any rounding shortfall.
+    Determinism Strategy:
+    ---------------------
+    1) Sort sellers/buyers lexicographically (stable, repeatable ordering)
+    2) For each seller, allocate across buyers proportionally to remaining demand
+    3) Use largest-remainder rounding (deterministic tie-break by buyer address)
+    4) Apply a deterministic top-up pass (rare) to correct any rounding shortfall
+
+    Returns:
+        List of (seller_addr, buyer_addr, qty_u) trades.
     """
     if clear_u <= 0:
         return []
@@ -162,6 +207,7 @@ def _allocate_planned_trades_deterministic(
     if total_supply <= 0 or total_demand <= 0:
         return []
 
+      # Never clear more than what exists on either side
     clear_u = int(min(clear_u, total_supply, total_demand))
     if clear_u <= 0:
         return []
@@ -210,7 +256,7 @@ def _allocate_planned_trades_deterministic(
             seller_rem[seller_addr] -= q_final
             remaining_to_clear -= q_final
 
-    # Deterministic top-up pass (very rare)
+    # Deterministic top-up pass (only if rounding/limits left a shortfall)
     if remaining_to_clear > 0:
         seller_order = [a for a, _ in sellers_sorted]
         buyer_order = [a for a, _ in buyers_sorted]
@@ -245,9 +291,11 @@ def _validate_interval_trades(
     planned_clear_u: int,
 ) -> Tuple[bool, str]:
     """
-    Validate:
-    - all sellers/buyers are from allowed lists
-    - non-negative quantities
+    Validate integrity of planned trades for interval t.
+
+    Checks:
+    - Seller/buyer membership
+    - Positive quantities
     - sum(trades) == planned_clear_u
     - per-seller sold <= supply_u
     - per-buyer bought <= demand_u
@@ -301,27 +349,48 @@ def _battery_step_pre_trade(
     cap_kwh: float,
     soc_threshold_frac: float,
 ) -> Tuple[float, float, float, float]:
-    """
-    Apply battery BEFORE market formation, aligned with S2 logic:
-      - If deficit: discharge to cover deficit
-      - If surplus: charge up to threshold (e.g., 90% SoC), remainder becomes market supply
+   """
+    Apply battery BEFORE market formation (aligned with S2 logic).
+
+    Input:
+    ------
+    net_kwh:
+      Raw net energy for the interval: PV - load (kWh for the 15-min interval)
+      - positive = surplus available
+      - negative = deficit to be covered
+
+    Logic:
+    ------
+    1) If deficit (net_kwh < 0): discharge battery to cover deficit (up to SoC)
+    2) If surplus (net_kwh > 0): charge battery up to threshold (e.g., 90%),
+       leaving remaining surplus for market supply.
 
     Returns:
-      net_post_kwh, soc_next_kwh, charge_kwh, discharge_kwh
+    --------
+    net_post_kwh:
+      Net energy AFTER pre-trade battery behavior:
+        - positive becomes market supply
+        - negative becomes market demand
+
+    soc_next_kwh:
+      Next state-of-charge after pre-trade step
+
+    charge_kwh, discharge_kwh:
+      Energy charged/discharged during this pre-trade step (kWh)
     """
     charge = 0.0
     discharge = 0.0
     soc_next = soc_kwh
     net_post = net_kwh
 
-    # 1) discharge first for deficits
+    # 1) discharge first for deficits (reduce market demand)
     if net_post < 0:
         from_batt = min(-net_post, soc_next)
         soc_next -= from_batt
         net_post += from_batt
         discharge += from_batt
 
-    # 2) if surplus, charge up to threshold
+    # 2) if surplus, charge up to threshold (prioritize selling beyond threshold)
     if net_post > 0:
         desired_soc = cap_kwh * soc_threshold_frac
         if soc_next < desired_soc:
@@ -339,11 +408,20 @@ def _battery_post_trade_store(
     cap_kwh: float,
 ) -> Tuple[float, float, float]:
     """
-    After market clears, take remaining prosumer surplus and charge battery to FULL.
-    Any excess beyond full is exported to the utility (Option A: utility FiT == market floor as outside option).
+    After market clears, charge remaining prosumer surplus to FULL capacity.
+
+    Any surplus beyond full battery is exported to utility.
 
     Returns:
-      soc_next_kwh, extra_charge_kwh, utility_export_kwh
+    --------
+    soc_next_kwh:
+      SoC after attempting to store remaining surplus
+
+    extra_charge_kwh:
+      Amount additionally charged post-trade (kWh)
+
+    utility_export_kwh:
+      Amount exported to utility after reaching full SoC (kWh)
     """
     soc_next = soc_kwh
     extra_charge = 0.0
@@ -362,15 +440,32 @@ def _battery_post_trade_store(
 # Main
 # ---------------------------
 def main() -> int:
+        """
+    Entrypoint for Oracle schedule generation.
+
+    Produces a run folder containing:
+      - interval_inputs.csv
+      - planned_trades.csv
+      - battery_timeseries.csv
+      - oracle_meta.json
+    """
     parser = argparse.ArgumentParser()
 
+# Basic I/O
     parser.add_argument("--participants", default="participants.csv", help="Path to participants.csv (addr,role).")
     parser.add_argument("--out-root", default="runs", help="Root output folder.")
     parser.add_argument("--run-name", default="", help="Optional suffix added to run folder name.")
+
+ # Stochastic profile generation seed (determinism across runs requires fixed seed)
     parser.add_argument("--seed", type=int, default=42, help="RNG seed for profile generation.")
+
+    # PV shape parameter used by Common_Functions (still deterministic under fixed seed)
     parser.add_argument("--pv-peak-kw", type=float, default=5.0, help="Peak PV generation (kW) used by Common_Functions.")
+
+    # Resolution is locked to 96 intervals/day
     parser.add_argument("--num-intervals", type=int, default=NUM_INTERVALS_PER_DAY,
                         help="Must be 96 (locked).")
+     # Validation control
     parser.add_argument("--lenient", action="store_true",
                         help="Do not fail on validation mismatches; log failures to oracle_meta.json (NOT recommended).")
 
@@ -392,6 +487,7 @@ def main() -> int:
     strict = not args.lenient
     np.random.seed(args.seed)
 
+    # Load participants
     participants_path = Path(args.participants)
     participants = _read_participants_csv(participants_path)
 
@@ -401,9 +497,13 @@ def main() -> int:
     n = len(participants)
     num_intervals = NUM_INTERVALS_PER_DAY
 
-    # Generate profiles (LOCKED: already kWh per 15-minute interval per Common_Functions.py)
+  # -------------------------------------------------------------------------
+    # Generate synthetic energy profiles
+    # -------------------------------------------------------------------------
+    # LOCKED expectation: these are already kWh per 15-minute interval
     loads_kwh = generate_household_profiles(num_households=n, num_intervals=num_intervals)
 
+    # PV only exists for prosumers
     pv_kwh = np.zeros((len(prosumers), num_intervals), dtype=float)
     if len(prosumers) > 0:
         pv_kwh = generate_pv_profiles(
@@ -412,14 +512,14 @@ def main() -> int:
             peak_generation=float(args.pv_peak_kw),
         )
 
-    # Index mapping
+    # Map participant indices to addresses (participant order is the canonical ordering)
     idx_to_addr = {i: participants[i].addr for i in range(n)}
     prosumer_indices = [i for i, p in enumerate(participants) if p.role == "prosumer"]
     consumer_indices = [i for i, p in enumerate(participants) if p.role == "consumer"]
 
-    # ---------------------------
-    # Battery state init
-    # ---------------------------
+    # -------------------------------------------------------------------------
+    # Battery state init (per prosumer)
+    # -------------------------------------------------------------------------
     cap_kwh = float(args.battery_capacity_kwh)
     init_soc = float(args.battery_init_frac) * cap_kwh
     soc_threshold = float(args.battery_soc_threshold)
@@ -429,7 +529,7 @@ def main() -> int:
     if len(prosumer_indices) > 0:
         battery_soc_kwh[:, 0] = init_soc
 
-    # We'll compute per-interval aggregated battery metrics (kWh, then convert to u)
+    # Aggregated battery metrics per interval (kWh, later converted to u where needed)
     batt_charge_kwh = np.zeros(num_intervals, dtype=float)
     batt_discharge_kwh = np.zeros(num_intervals, dtype=float)
     batt_curtail_kwh = np.zeros(num_intervals, dtype=float)
@@ -438,13 +538,14 @@ def main() -> int:
     # For plotting SoC
     avg_soc_pct = np.zeros(num_intervals + 1, dtype=float)
 
-    # ---------------------------
-    # Pre-trade: compute net after battery threshold behavior
-    # ---------------------------
-    # net_post_kwh_all: per participant per interval AFTER pre-trade battery (threshold)
+    # -------------------------------------------------------------------------
+    # Pre-trade battery step: convert raw PV/load into post-battery net positions
+    # -------------------------------------------------------------------------
+    # net_post_kwh_all[i, t] is the market-facing net after battery threshold behavior:
+    #   >0 => supply for participant i at interval t
+    #   <0 => demand for participant i at interval t
     net_post_kwh_all = np.zeros((n, num_intervals), dtype=float)
 
-    # Assign PV to prosumers in participant order
     # pv_kwh[p_idx, t] corresponds to participant at prosumer_indices[p_idx]
     for t in range(num_intervals):
         # Update avg SoC at interval start
@@ -482,11 +583,15 @@ def main() -> int:
     else:
         avg_soc_pct[num_intervals] = 0.0
 
-    # Convert to qty_u (0.01 kWh integer units) for market formation
+    # Convert post-trade net positions into qty_u:
+    # - surplus_u is market supply (integer 0.01 kWh)
+    # - deficit_u is market demand (integer 0.01 kWh)
     surplus_u = _kwh_to_qty_u(np.maximum(net_post_kwh_all, 0.0))
     deficit_u = _kwh_to_qty_u(np.maximum(-net_post_kwh_all, 0.0))
 
-    # Prepare output folder
+     # -------------------------------------------------------------------------
+    # Prepare output folder + provenance copy
+    # -------------------------------------------------------------------------
     run_folder = _timestamp_folder()
     if args.run_name.strip():
         run_folder = f"{run_folder}_{args.run_name.strip()}"
@@ -504,20 +609,24 @@ def main() -> int:
     seller_addrs = [idx_to_addr[i] for i in prosumer_indices]
     buyer_addrs = [idx_to_addr[i] for i in consumer_indices]
 
-    # For post-trade battery completion (threshold -> full), we need per-interval per-seller remaining surplus
-    # We'll compute sold_u per seller from trades, then store remaining kWh into battery to full.
+    # -------------------------------------------------------------------------
+    # Interval loop: form market + plan trades + post-trade battery store-to-full
+    # -------------------------------------------------------------------------
     for t in range(num_intervals):
+        # Supply/demand vectors in qty_u for current interval
         s_u_vec = np.array([int(surplus_u[i, t]) for i in prosumer_indices], dtype=np.int64)
         d_u_vec = np.array([int(deficit_u[i, t]) for i in consumer_indices], dtype=np.int64)
 
         total_supply_u = int(s_u_vec.sum())
         total_demand_u = int(d_u_vec.sum())
+        # Oracle clears at most min(supply, demand). Feeder cap is NOT applied here.
         planned_clear_u = int(min(total_supply_u, total_demand_u))
 
         # Track basic physical totals (optional, but helpful for plotting / sanity)
         total_load_kwh = float(np.sum(loads_kwh[:, t]))
         total_pv_kwh = float(np.sum(pv_kwh[:, t])) if pv_kwh.size else 0.0
 
+        # interval_inputs.csv: required fields + extra safe fields
         interval_rows.append({
             "interval": t,
             "total_supply_u": total_supply_u,
@@ -532,8 +641,8 @@ def main() -> int:
             "utility_export_u": 0,
         })
 
+        # If nothing clears, no trades, but we still allow post-trade store-to-full below
         if planned_clear_u <= 0:
-            # Even if no trades, still allow post-trade store from remaining supply (which is all supply)
             sold_u_by_seller = np.zeros(len(prosumer_indices), dtype=np.int64)
         else:
             trades = _allocate_planned_trades_deterministic(
@@ -572,10 +681,9 @@ def main() -> int:
                 })
                 sold_u_by_seller[seller_index[seller]] += int(q_u)
 
-        # ---------------------------
-        # Post-trade: store remaining seller surplus to FULL (threshold -> full)
-        # ---------------------------
-        # remaining_u per seller = supply_u - sold_u
+        # ---------------------------------------------------------------------
+        # Post-trade battery completion: threshold -> full, then export remainder
+        # ---------------------------------------------------------------------
         if len(prosumer_indices) > 0:
             remaining_u = np.maximum(s_u_vec - sold_u_by_seller, 0)
             remaining_kwh = _qty_u_to_kwh(remaining_u)
@@ -584,7 +692,9 @@ def main() -> int:
             export_kwh = 0.0
 
             for p_idx, part_idx in enumerate(prosumer_indices):
-                soc_now = float(battery_soc_kwh[p_idx, t + 1])  # after pre-trade step
+                # Start from SoC after pre-trade step (already stored in battery_soc_kwh[:, t+1])
+                soc_now = float(battery_soc_kwh[p_idx, t + 1]) 
+                # Store remaining surplus to FULL (not just threshold)
                 soc_next, ch2, exp = _battery_post_trade_store(
                     remaining_surplus_kwh=float(remaining_kwh[p_idx]),
                     soc_kwh=soc_now,
@@ -594,10 +704,11 @@ def main() -> int:
                 extra_charge_kwh += ch2
                 export_kwh += exp
 
+            # Update aggregated metrics
             batt_charge_kwh[t] += extra_charge_kwh
             utility_export_kwh[t] += export_kwh
 
-            # Add extra columns to interval row for completeness
+            # Update interval row with total battery metrics
             interval_rows[-1].update({
                 "battery_charge_u_total": int(np.floor(batt_charge_kwh[t] * 100.0 + 1e-12)),
                 "battery_discharge_u_total": int(np.floor(batt_discharge_kwh[t] * 100.0 + 1e-12)),
@@ -612,7 +723,9 @@ def main() -> int:
                 "utility_export_u": 0,
             })
 
+   # =============================================================================
     # Write outputs
+    # =============================================================================
     interval_inputs_path = out_dir / "interval_inputs.csv"
     planned_trades_path = out_dir / "planned_trades.csv"
     battery_ts_path = out_dir / "battery_timeseries.csv"
@@ -632,6 +745,10 @@ def main() -> int:
     })
     batt_df.to_csv(battery_ts_path, index=False)
 
+
+    # =============================================================================
+    # Provenance + meta summary
+    # =============================================================================
     meta = {
         "run_folder": str(out_dir),
         "seed": args.seed,
