@@ -341,8 +341,11 @@ def print_s2_summary_report(results):
 def create_visualizations(results):
     """
     Calls all the individual plotting functions to generate S2 graphs.
-    UPDATED: Adds Average Battery SoC plot.
     """
+
+    # This is a simple orchestration function to generate all S2 figures in a single call.
+    # - The order below mirrors a typical “story” for the results:
+    #   (1) community power composition, (2) benefit split, (3) grid impact, (4) average daily profile, (5) battery SoC.
     print("\n--- Generating Visualizations for S2 Model ---")
     plot_s2_community_power_flow(results)
     plot_benefit_distribution(results)
@@ -358,7 +361,6 @@ def create_visualizations(results):
 def plot_s2_community_power_flow(results, week_to_plot=1):
     """
     Generates the S2 power flow chart with a P2P layer.
-    UPDATED: X-axis now matches Average Daily Power Transfer (Time of Day: HH:MM).
     Works for 24h (96 intervals) and longer horizons (clips window safely).
     """
     intervals_per_day = 96
@@ -373,7 +375,7 @@ def plot_s2_community_power_flow(results, week_to_plot=1):
 
     self_consumed_kw = np.minimum(agg_load_kw, agg_gen_kw)
 
-    # ✅ Match Average Daily Power Transfer x-axis
+    # Match Average Daily Power Transfer x-axis
     time_of_day = pd.to_datetime(
         pd.date_range(start="00:00", periods=len(agg_load_kw), freq="15min")
     ).strftime("%H:%M")
@@ -399,7 +401,7 @@ def plot_s2_community_power_flow(results, week_to_plot=1):
     ax.legend(loc="upper left")
     ax.grid(True)
 
-    # ✅ Same tick spacing as your Avg Daily Power Transfer plot
+    # Same tick spacing as your Avg Daily Power Transfer plot
     ax.xaxis.set_major_locator(mticker.MultipleLocator(8))  # every 2 hours
 
     plt.tight_layout()
@@ -409,8 +411,7 @@ def plot_s2_community_power_flow(results, week_to_plot=1):
 
 def plot_average_battery_soc(results, week_to_plot=1):
     """
-    Generates a line plot of the average prosumer battery state of charge for S2.
-    FIXED: Uses 96 points (drops the final 24:00 point) to avoid HH:MM wrap to 00:00.
+    Generates a line plot of the average prosumer battery state of charge for S2
     X-axis matches Average Daily Power Transfer (Time of Day: HH:MM).
     """
     intervals_per_day = 96
@@ -420,7 +421,7 @@ def plot_average_battery_soc(results, week_to_plot=1):
     avg_soc_kwh_full = np.mean(results["battery_soc_kwh"], axis=0)
     avg_soc_pct_full = (avg_soc_kwh_full / float(config.BATTERY_CAPACITY_KWH)) * 100.0
 
-    # ✅ Use interval-start SoC only (length = NUM_INTERVALS), prevents 24:00 -> 00:00 wrap
+    # Use interval-start SoC only (length = NUM_INTERVALS), prevents 24:00 -> 00:00 wrap
     avg_soc_pct = avg_soc_pct_full[:-1]
 
     # Clamp window for SoC series (length = NUM_INTERVALS)
@@ -505,7 +506,6 @@ def plot_benefit_distribution(results):
 def plot_grid_impact(results, week_to_plot=1):
     """
     Generates the grid congestion plot showing P2P flow vs. feeder capacity.
-    UPDATED: X-axis now matches Average Daily Power Transfer (Time of Day: HH:MM).
     Works for 24h (96 intervals) and longer horizons.
     """
     p2p_flow_kwh = results["trades_df"].groupby("interval")["p2p_trade_volume"].sum()
@@ -516,7 +516,7 @@ def plot_grid_impact(results, week_to_plot=1):
 
     window = p2p_flow_kw[start:end]
 
-    # ✅ Match Average Daily Power Transfer x-axis
+    # Match Average Daily Power Transfer x-axis
     time_of_day = pd.to_datetime(
         pd.date_range(start="00:00", periods=len(window), freq="15min")
     ).strftime("%H:%M")
@@ -551,7 +551,7 @@ def plot_grid_impact(results, week_to_plot=1):
     ax.legend()
     ax.grid(True)
 
-    # ✅ Same tick spacing as your Avg Daily Power Transfer plot (every 2 hours)
+    # Same tick spacing as your Avg Daily Power Transfer plot (every 2 hours)
     ax.xaxis.set_major_locator(mticker.MultipleLocator(8))
 
     plt.tight_layout()
@@ -563,11 +563,6 @@ def plot_grid_impact(results, week_to_plot=1):
 def plot_s2_average_daily_power_transfer(results):
     """
     Generates a line plot showing the average 24-hour power flows for the S2 model.
-
-    UPDATED (to match S1 metrics):
-      - Adds Battery Charging (kW) and Battery Discharging (kW)
-      - Keeps: Load, PV, Grid Imports (dashed), P2P Transfer (shaded)
-      - X-axis: HH:MM (already aligned)
     """
     intervals_per_day = 96
     num_intervals = int(config.NUM_INTERVALS)
@@ -635,7 +630,7 @@ def plot_s2_average_daily_power_transfer(results):
     # P2P as shaded area (existing style)
     ax.fill_between(time_of_day, avg_p2p_kw, label="P2P Transfer", color="purple", alpha=0.5)
 
-    # ✅ Battery metrics (like S1)
+    # Battery metrics (like S1)
     ax.plot(time_of_day, avg_batt_charge_kw, label="Battery Charging", linewidth=2.5)
     ax.plot(time_of_day, avg_batt_discharge_kw, label="Battery Discharging", linewidth=2.5, linestyle="--")
 
@@ -655,7 +650,9 @@ def plot_s2_average_daily_power_transfer(results):
 # -----------------------------
 # Entry point
 # -----------------------------
-
+# Running this script executes the full S2 workflow:
+# (1) simulation, (2) console summary, (3) figure generation.
+# Figures are saved to disk as PNG files for inclusion in the report.
 if __name__ == "__main__":
     s2_results = run_s2_simulation()
     print_s2_summary_report(s2_results)
