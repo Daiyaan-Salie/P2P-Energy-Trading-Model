@@ -1,5 +1,17 @@
 # run_multisize_sensitivity_analysis.py
-
+#This script performs a parameter sensitivity analysis for the pooled P2P market
+# mechanism by sweeping:
+#   - Network size (total households)
+#   - Feeder capacity (kW)
+#   - Prosumer share (fraction of households with PV+battery)
+# and recording three evaluation dimensions:
+#   (1) Economic welfare (system benefit proxy)
+#   (2) Fairness (Gini index + consumer-to-prosumer benefit ratio)
+#   (3) Technical robustness (feeder overload frequency + severity)
+#
+# Key outputs:
+#   - multisize_sensitivity_analysis_results.csv
+#   - faceted_heatmap_technical_stress.png
 import pandas as pd
 import numpy as np
 from itertools import product
@@ -10,20 +22,37 @@ import matplotlib.pyplot as plt
 # ==============================================================================
 # SECTION 1: CONFIGURATION PARAMETERS
 # ==============================================================================
+#- These constants define the baseline technical and economic assumptions used in the sensitivity experiments.
+# - Unlike the scenario scripts (S1/S2/S3) that may read from config.py, this sensitivity script is self-contained, so parameters are set here.
 # TOTAL_HOUSEHOLDS is now defined in the analysis loop, not as a global constant.
+
 NUM_INTERVALS = 96 * 14
-PRICE_FLOOR = 0.50
-PEAK_PV_GENERATION_KW = 7.5
-BATTERY_CAPACITY_KWH = 13.5
+
+# - Lower bound used to construct the market price for P2P trades.
+# - The price formation rule in this script uses a mid-point between PRICE_FLOOR
+#   and the utility tariff (see run_simulation()).
+PRICE_FLOOR = 0.85
+PEAK_PV_GENERATION_KW = 5
+BATTERY_CAPACITY_KWH = 10
+#Charge threshold defines the point above which surplus is offered rather than stored.
 BATTERY_CHARGE_THRESHOLD = 0.90
 
 # ==============================================================================
 # SECTION 2: COMMON HELPER FUNCTIONS & SIMULATION ENGINE
 # ==============================================================================
-# (These sections are unchanged from the previous version)
+#   (1) Synthetic profile generation (load and PV)
+#   (2) Welfare and fairness metrics
+#   (3) Technical robustness metrics
+#   (4) A simplified pooled market simulation engine
+#
+# - The intent is not to replicate full S2/S3 complexity, but to provide a consistent
+#   comparative framework across many parameter combinations.
+# See S2_model script for further clarification on functions defined below.
 
 def _gaussian(x, mu, sig, amplitude):
+    # Creates a Gaussian-shaped peak used to build synthetic demand profiles.
     return amplitude * np.exp(-np.power(x - mu, 2.) / (2 * np.power(sig, 2.)))
+    
 def generate_household_profiles(num_households, num_intervals):
     intervals_per_day = 96; x = np.arange(intervals_per_day)
     base_load_kw = 0.25 + 0.1 * np.sin(np.pi * (x - 24) / 48)
@@ -38,6 +67,8 @@ def generate_household_profiles(num_households, num_intervals):
         profile_kw = (full_base_profile * scaling_factor) + noise; profile_kw[profile_kw < 0] = 0
         household_loads.append(profile_kw / 4)
     return np.array(household_loads)
+
+
 def generate_pv_profiles(num_prosumers, num_intervals, peak_generation_kw):
     hours = np.arange(0, 24, 0.25)
     base_daily_profile = np.maximum(0, peak_generation_kw * np.sin(np.pi * (hours - 6) / 12))
@@ -49,20 +80,26 @@ def generate_pv_profiles(num_prosumers, num_intervals, peak_generation_kw):
         profile = (full_base_profile * scaling_factor) + noise; profile[profile < 0] = 0
         pv_generations.append(profile / 4)
     return np.array(pv_generations)
+
+
 def calculate_economic_welfare(results_df, utility_tariff):
     results_df['consumer_surplus'] = (utility_tariff - results_df['market_price']) * results_df['p2p_trade_volume']
     results_df['prosumer_profit'] = results_df['market_price'] * results_df['p2p_trade_volume']
     total_consumer_surplus = results_df.groupby('consumer_id')['consumer_surplus'].sum(); total_prosumer_profit = results_df.groupby('prosumer_id')['prosumer_profit'].sum()
     return {"total_system_benefit": total_consumer_surplus.sum() + total_prosumer_profit.sum(), "consumer_surplus_per_agent": total_consumer_surplus, "prosumer_profit_per_agent": total_prosumer_profit}
+
+    
 def calculate_gini_index(benefits):
     if benefits.sum() == 0: return 0.0
     sorted_benefits = np.sort(np.array(benefits)); n = len(sorted_benefits); index = np.arange(1, n + 1)
     return float((2 * np.sum(index * sorted_benefits)) / (n * np.sum(sorted_benefits)) - (n + 1) / n)
+
 def calculate_fairness_metrics(consumer_benefits, prosumer_benefits):
     all_benefits = pd.concat([consumer_benefits, prosumer_benefits]).fillna(0).values; gini_index = calculate_gini_index(all_benefits)
     total_consumer_surplus, total_prosumer_profit = consumer_benefits.sum(), prosumer_benefits.sum()
     c_to_p_ratio = total_consumer_surplus / total_prosumer_profit if total_prosumer_profit > 0 else np.inf
     return {"gini_index": gini_index, "c_to_p_ratio": c_to_p_ratio}
+
 def calculate_technical_robustness(results_df, feeder_capacity_kw):
     """Calculates feeder overload frequency and severity."""
     if results_df.empty: 
@@ -86,6 +123,9 @@ def calculate_technical_robustness(results_df, feeder_capacity_kw):
         "overload_frequency_percent": overload_frequency, 
         "overload_severity_percent": overload_severity
     }
+
+
+
 def run_simulation(total_households, num_consumers, num_prosumers, feeder_capacity_kw, utility_tariff):
     if num_prosumers == 0 or num_consumers == 0: return pd.DataFrame()
     loads_kwh = generate_household_profiles(total_households, NUM_INTERVALS)
