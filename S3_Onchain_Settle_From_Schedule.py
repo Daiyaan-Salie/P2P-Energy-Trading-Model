@@ -1,11 +1,11 @@
 """
-8 - S3c_Onchain_Settle_From_Schedule_Rev1.py
+8 - S3_Onchain_Settle_From_Schedule_Rev1.py
 ===========================================
 
 Purpose
 -------
 Replay an *off-chain planned schedule* (produced by the Oracle script) and perform
-the *on-chain settlement* for each interval against the S3c DEX smart contract.
+the *on-chain settlement* for each interval against the S3 DEX smart contract.
 
 This script is the "bridge" between:
   - Script 5.7 (Oracle): produces interval_inputs.csv + planned_trades.csv
