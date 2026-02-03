@@ -1,12 +1,28 @@
-# S3c_deployer_address.py
+# Model S3: Deployer Address Sanity Check Utility
 #
-# Read-only sanity check for the *current* deployment defined in .env:
-# - Derive coordinator address from COORDINATOR_MNEMONIC
-# - Print ALGO balance
-# - List opted-in assets (ASA balances)
-# - Validate opt-in for ZAR_ASA_ID and KWH_ASA_ID (from .env)
-# - Check whether this address is the creator of DEX_APP_ID (from .env)
+# Purpose:
+# --------
+# This script performs a *read-only* validation of the current deployment
+# configuration defined in the local `.env` file.
+#
+# It is intended as a safety and debugging tool to ensure that:
+# - The coordinator mnemonic resolves to the expected Algorand address
+# - The address holds sufficient ALGO balance
+# - The address is opted-in to the required project ASAs (ZAR and kWh)
+# - The address matches the creator of the deployed DEX application
+#
+# No state is modified on-chain by this script.
+#
+# Typical use cases:
+# ------------------
+# - Pre-deployment sanity checks
+# - Debugging failed creator-only contract calls
+# - Verifying environment configuration before running S3 scripts
+# =============================================================================
 
+# -----------------------------
+# Imports
+# -----------------------------
 import os
 import sys
 from dotenv import load_dotenv
@@ -20,6 +36,11 @@ def env(name: str, allow_empty: bool = False) -> str:
     if not allow_empty and v.strip() == "":
         sys.exit(f"[ERR] Empty env var not allowed: {name}")
     return v.strip()
+
+# -----------------------------
+# Main logic
+# -----------------------------
+# Performs all read-only checks and prints results to stdout.
 
 def main():
     load_dotenv()
@@ -46,7 +67,10 @@ def main():
     print("🔹 Coordinator Address:", addr)
     print("💰 ALGO Balance:", algo_balance, "ALGO")
 
-    # Assets
+    # -----------------------------
+    # Asset opt-in inspection
+    # -----------------------------
+    # Build a mapping of asset_id -> balance for all opted-in ASAs.
     assets = {a["asset-id"]: a.get("amount", 0) for a in info.get("assets", [])}
 
     print("\n🔹 Opted-in Assets:")
@@ -56,7 +80,12 @@ def main():
         for aid in sorted(assets.keys()):
             print(f"  - Asset ID {aid}: balance = {assets[aid]}")
 
-    # Validate project ASAs
+    # -----------------------------
+    # Project ASA validation
+    # -----------------------------
+    # Ensures the coordinator is opted-in to the ZAR and kWh ASAs
+    # required for S3 settlement flows.
+    
     print("\n🔹 Validation (ASAs from .env):")
     for aid, name in [(zar_asa_id, "ZAR_ASA_ID"), (kwh_asa_id, "KWH_ASA_ID")]:
         if aid in assets:
@@ -64,7 +93,14 @@ def main():
         else:
             print(f"⚠️ {name} ({aid}) not found (needs opt-in)")
 
-    # Check app creator
+    # -----------------------------
+    # Smart contract creator check
+    # -----------------------------
+    # Validates that the coordinator address matches the creator
+    # of the deployed DEX application.
+    #
+    # This is critical because many contract methods are
+    # creator-only (oracle/admin role).
     print("\n🔹 Validation (DEX_APP_ID creator check):")
     try:
         app = client.application_info(dex_app_id)
@@ -78,5 +114,10 @@ def main():
     except Exception as e:
         print(f"⚠️ Could not fetch app info for DEX_APP_ID={dex_app_id}: {e}")
 
+# -----------------------------
+# Entry point
+# -----------------------------
+# Allows the script to be executed directly:
+#   python S3c_deployer_address.py
 if __name__ == "__main__":
     main()
