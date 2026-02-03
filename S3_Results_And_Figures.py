@@ -9,8 +9,8 @@ UPDATED (Rev – contiguous shading + authoritative physical totals):
     * total_load_kwh per interval
     * total_pv_kwh per interval
 - Loads battery_timeseries.csv (from Script 5.7) if available
-- Battery-aware grid import + curtailment accounting
-- Adds battery charging/discharging to S3 plots (S1/S2 parity)
+- Battery-aware grid import + export + curtailment accounting (Option A)
+- Adds battery charging/discharging and utility export to S3 plots (S1/S2 parity)
 - FIX: Diagnostic plot shading now uses contiguous bands (no vertical stripe effect)
 """
 
@@ -179,7 +179,7 @@ def build_physical_series_from_interval_inputs(interval_inputs: pd.DataFrame) ->
 def build_battery_series(battery_ts: Optional[pd.DataFrame], num_intervals: int) -> pd.DataFrame:
     """
     battery_timeseries.csv columns (from updated 5.7):
-      interval, avg_soc_pct, battery_charge_u, battery_discharge_u, curtail_u
+      interval, avg_soc_pct, battery_charge_u, battery_discharge_u, curtail_u, utility_export_u (optional)
     """
     if battery_ts is None:
         return pd.DataFrame({
@@ -188,9 +188,11 @@ def build_battery_series(battery_ts: Optional[pd.DataFrame], num_intervals: int)
             "battery_charge_u": np.zeros(num_intervals, dtype=float),
             "battery_discharge_u": np.zeros(num_intervals, dtype=float),
             "curtail_u": np.zeros(num_intervals, dtype=float),
+            "utility_export_u": np.zeros(num_intervals, dtype=float),
             "battery_charge_kw": np.zeros(num_intervals, dtype=float),
             "battery_discharge_kw": np.zeros(num_intervals, dtype=float),
             "curtail_kw": np.zeros(num_intervals, dtype=float),
+            "utility_export_kw": np.zeros(num_intervals, dtype=float),
         })
 
     df = battery_ts.copy()
@@ -215,9 +217,15 @@ def build_battery_series(battery_ts: Optional[pd.DataFrame], num_intervals: int)
     df["interval"] = pd.to_numeric(df["interval"], errors="coerce").fillna(0).astype(int)
     df = df.sort_values("interval").reset_index(drop=True)
 
+    # utility_export_u is optional (added in 5.7 Rev2+). If absent, treat as zero.
+    if "utility_export_u" not in df.columns:
+        df["utility_export_u"] = 0.0
+    df["utility_export_u"] = pd.to_numeric(df["utility_export_u"], errors="coerce").fillna(0.0)
+
     df["battery_charge_kw"] = df["battery_charge_u"] * KWH_PER_U * KW_PER_KWH_INTERVAL
     df["battery_discharge_kw"] = df["battery_discharge_u"] * KWH_PER_U * KW_PER_KWH_INTERVAL
     df["curtail_kw"] = df["curtail_u"] * KWH_PER_U * KW_PER_KWH_INTERVAL
+    df["utility_export_kw"] = df["utility_export_u"] * KWH_PER_U * KW_PER_KWH_INTERVAL
 
     # Ensure length matches
     if len(df) != num_intervals:
@@ -393,6 +401,8 @@ def compute_kpis(
     total_p2p_kwh = float((pd.to_numeric(interval_summary["scaled_total_u"], errors="coerce").fillna(0.0) * KWH_PER_U).sum())
 
     curtailed_kwh = float((pd.to_numeric(batt["curtail_u"], errors="coerce").fillna(0.0) * KWH_PER_U).sum())
+    utility_export_kwh = float((pd.to_numeric(batt.get("utility_export_u", 0.0), errors="coerce").fillna(0.0) * KWH_PER_U).sum())
+    utility_export_revenue_zar = utility_export_kwh * float(getattr(config, "UTILITY_FIT_RATE", 0.0))
 
     # Battery-aware grid imports (assume no grid charging)
     p2p_kw = pd.to_numeric(settlement["settled_kw"], errors="coerce").fillna(0.0).to_numpy()
@@ -437,6 +447,8 @@ def compute_kpis(
         "total_grid_kwh": total_grid_kwh,
         "self_consumption_ratio": self_consumption_ratio,
         "curtailed_kwh": curtailed_kwh,
+        "utility_export_kwh": utility_export_kwh,
+        "utility_export_revenue_zar": utility_export_revenue_zar,
         "mcp_mean": mean_mcp,
         "mcp_weighted": weighted,
         "feeder_cap_kw": feeder_cap_kw,
@@ -452,11 +464,14 @@ def compute_kpis(
 
 def plot_community_power_flow(phys: pd.DataFrame, settlement: pd.DataFrame, batt: pd.DataFrame, out_path: Path):
     df = phys.merge(settlement[["interval", "settled_kw"]], on="interval", how="left").copy()
-    df = df.merge(batt[["interval", "battery_discharge_kw", "curtail_kw"]], on="interval", how="left").copy()
+    df = df.merge(batt[["interval", "battery_charge_kw", "battery_discharge_kw", "curtail_kw", "utility_export_kw"]], on="interval", how="left").copy()
 
     df["settled_kw"] = df["settled_kw"].fillna(0.0)
     df["battery_discharge_kw"] = df["battery_discharge_kw"].fillna(0.0)
+    df["battery_charge_kw"] = df["battery_charge_kw"].fillna(0.0)
     df["curtail_kw"] = df["curtail_kw"].fillna(0.0)
+    df["utility_export_kw"] = df["utility_export_kw"].fillna(0.0)
+    df["utility_export_kw"] = df["utility_export_kw"].fillna(0.0)
 
     load_kw = df["community_load_kw"].to_numpy(dtype=float)
     pv_kw = df["community_pv_kw"].to_numpy(dtype=float)
@@ -488,8 +503,12 @@ def plot_community_power_flow(phys: pd.DataFrame, settlement: pd.DataFrame, batt
     )
 
     ax.plot(time_of_day, load_kw, label="Community Load", color="black", linewidth=2.5)
+    ax.plot(time_of_day, df["battery_charge_kw"].to_numpy(dtype=float),
+            label="Battery Charging (Sink)", linestyle=":", linewidth=2)
+    ax.plot(time_of_day, df["utility_export_kw"].to_numpy(dtype=float),
+            label="Utility Export (FiT)", linestyle="--", linewidth=2)
     ax.plot(time_of_day, df["curtail_kw"].to_numpy(dtype=float),
-            label="Energy Curtailed", color="#d62728", linestyle="--", linewidth=2)
+            label="Energy Curtailed", linestyle="--", linewidth=2)
 
     ax.set_title("Model S3: Community Power Flow", fontsize=16)
     ax.set_xlabel("Time of Day")
@@ -546,7 +565,7 @@ def plot_grid_impact(settlement: pd.DataFrame, feeder_cap_kw: float, out_path: P
 def plot_average_daily(phys: pd.DataFrame, settlement: pd.DataFrame, batt: pd.DataFrame, out_path: Path):
     df = phys.merge(settlement[["interval", "settled_kw"]], on="interval", how="left").copy()
     df = df.merge(
-        batt[["interval", "battery_charge_kw", "battery_discharge_kw", "curtail_kw"]],
+        batt[["interval", "battery_charge_kw", "battery_discharge_kw", "curtail_kw", "utility_export_kw"]],
         on="interval",
         how="left"
     ).copy()
@@ -554,7 +573,10 @@ def plot_average_daily(phys: pd.DataFrame, settlement: pd.DataFrame, batt: pd.Da
     df["settled_kw"] = df["settled_kw"].fillna(0.0)
     df["battery_charge_kw"] = df["battery_charge_kw"].fillna(0.0)
     df["battery_discharge_kw"] = df["battery_discharge_kw"].fillna(0.0)
+    df["battery_charge_kw"] = df["battery_charge_kw"].fillna(0.0)
     df["curtail_kw"] = df["curtail_kw"].fillna(0.0)
+    df["utility_export_kw"] = df["utility_export_kw"].fillna(0.0)
+    df["utility_export_kw"] = df["utility_export_kw"].fillna(0.0)
 
     df["tod"] = df["interval"] % INTERVALS_PER_DAY
     avg = df.groupby("tod").mean(numeric_only=True)
@@ -565,6 +587,7 @@ def plot_average_daily(phys: pd.DataFrame, settlement: pd.DataFrame, batt: pd.Da
     batt_ch_kw = avg["battery_charge_kw"].to_numpy(dtype=float)
     batt_dis_kw = avg["battery_discharge_kw"].to_numpy(dtype=float)
     curtail_kw = avg["curtail_kw"].to_numpy(dtype=float)
+    util_exp_kw = avg["utility_export_kw"].to_numpy(dtype=float)
 
     grid_kw = np.maximum(load_kw - pv_kw - batt_dis_kw - p2p_kw, 0.0)
 
@@ -582,7 +605,8 @@ def plot_average_daily(phys: pd.DataFrame, settlement: pd.DataFrame, batt: pd.Da
     ax.plot(time_of_day, batt_ch_kw, label="Battery Charging", linewidth=2.2)
     ax.plot(time_of_day, batt_dis_kw, label="Battery Discharging", linewidth=2.2, linestyle="--")
 
-    ax.plot(time_of_day, curtail_kw, label="Energy Curtailed", color="#d62728", linestyle="--", linewidth=2)
+    ax.plot(time_of_day, util_exp_kw, label="Utility Export (FiT)", linestyle="--", linewidth=2)
+    ax.plot(time_of_day, curtail_kw, label="Energy Curtailed", linestyle="--", linewidth=2)
 
     ax.set_title("Model S3: Average Daily Power Transfer", fontsize=16)
     ax.set_xlabel("Time of Day")
@@ -671,6 +695,8 @@ def plot_kpi_table(kpis: Dict[str, float], fairness: Dict[str, float], out_path:
         ("Grid Imports (kWh)", f"{kpis['total_grid_kwh']:.2f}"),
         ("Self-Consumption Ratio", f"{kpis['self_consumption_ratio']*100:.2f}%"),
         ("Curtailed Energy (kWh)", f"{kpis['curtailed_kwh']:.2f}"),
+        ("Utility Export (kWh)", f"{kpis.get('utility_export_kwh', 0.0):.2f}"),
+        ("Utility Export Revenue (ZAR)", f"{kpis.get('utility_export_revenue_zar', 0.0):.2f}"),
         ("Feeder Cap (kW)", f"{kpis['feeder_cap_kw']:.1f}"),
         ("Peak Utilisation", f"{kpis['peak_util']*100:.1f}%"),
         ("Mean MCP (ZAR/kWh)", f"{kpis['mcp_mean']:.2f}"),
@@ -772,6 +798,8 @@ def main():
     print(f"Grid Imports:            {kpis['total_grid_kwh']:.2f} kWh")
     print(f"Self-Consumption Ratio:  {kpis['self_consumption_ratio']*100:.2f}%")
     print(f"Curtailed Energy:        {kpis['curtailed_kwh']:.2f} kWh")
+    print(f"Utility Export:          {kpis.get('utility_export_kwh', 0.0):.2f} kWh")
+    print(f"Utility Export Revenue:  {kpis.get('utility_export_revenue_zar', 0.0):.2f} ZAR")
     print(f"Mean MCP:                {kpis['mcp_mean']:.2f} ZAR/kWh")
     print(f"Weighted MCP:            {kpis['mcp_weighted']:.2f} ZAR/kWh")
     print(f"Feeder Capacity:         {kpis['feeder_cap_kw']:.1f} kW")
