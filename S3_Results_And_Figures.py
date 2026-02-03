@@ -1,18 +1,72 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""S3_Results_And_Figures.py
-
-Model S3 (On-Chain) – Results, KPIs, Fairness Metrics & Figures
-
-UPDATED (Rev – contiguous shading + authoritative physical totals):
-- Uses interval_inputs.csv as the single source of truth for:
-    * total_load_kwh per interval
-    * total_pv_kwh per interval
-- Loads battery_timeseries.csv (from Script 5.7) if available
-- Battery-aware grid import + export + curtailment accounting (Option A)
-- Adds battery charging/discharging and utility export to S3 plots (S1/S2 parity)
-- FIX: Diagnostic plot shading now uses contiguous bands (no vertical stripe effect)
-"""
+# =============================================================================
+# S3_Results_And_Figures.py
+#
+# Model S3 (On-Chain) – Results, KPIs, Fairness Metrics & Figures
+#
+# Purpose:
+# --------
+# Post-process a completed Model S3c run by loading:
+#   - Oracle outputs (Script 5.7)
+#   - On-chain settlement logs (Script 5.8)
+# and producing:
+#   - KPI summary (energy + MCP + execution success)
+#   - Fairness metrics (Gini indices aligned to thesis definitions)
+#   - Publication-ready figures (S1/S2/S3 parity)
+#   - CSV + JSON result artifacts for the thesis write-up
+# - Uses interval_inputs.csv as the single source of truth for:
+#     * total_load_kwh (per interval)
+#     * total_pv_kwh   (per interval)
+# - Loads battery_timeseries.csv (from Script 5.7) if available
+# - Battery-aware grid import + export + curtailment accounting (Option A)
+# - Adds battery charging/discharging and utility export to S3 plots (S1/S2 parity)
+# - FIX: Diagnostic plot shading now uses contiguous bands (no vertical stripe effect)
+#
+# Inputs (expected in --in-dir):
+# -----------------------------
+# Required (Oracle, Script 5.7):
+#   - participants.csv
+#   - oracle_meta.json
+#   - interval_inputs.csv
+#   - planned_trades.csv
+#
+# Required (Settlement, Script 5.8):
+#   - interval_summary.csv
+#   - trade_log.csv
+#
+# Optional:
+#   - battery_timeseries.csv  (Script 5.7 battery-integrated run)
+#
+# Outputs (written to --out-dir or <in-dir>/results_s3):
+# ------------------------------------------------------
+# <out-dir>/
+#   data/
+#     - s3_agent_fairness_breakdown.csv
+#     - s3_kpis.csv
+#     - s3_kpis.json
+#   figures/
+#     - S3_community_power_flow.png
+#     - S3_grid_impact.png
+#     - S3_average_daily_power_transfer.png
+#     - S3_interval_diagnostics.png
+#     - S3_kpi_table.png
+#
+# Unit conventions:
+# -----------------
+# - 15-minute resolution (96 intervals/day)
+# - qty_u represents 0.01 kWh (KWH_PER_U = 0.01)
+# - For plotting in kW:
+#     kW = kWh_per_interval * (60 / 15) = kWh * 4
+#
+# IMPORTANT MODELING NOTES:
+# -------------------------
+# - Physical totals (load/PV) are taken ONLY from interval_inputs.csv
+#   because these reflect the authoritative Oracle export for that run.
+# - Settled P2P energy is computed from interval_summary['scaled_total_u']
+#   (this matches your prior KPI convention, and is consistent with feeder-cap scaling).
+# - Fairness uses on-chain MCP per interval and settled trades (trade_log ok==1).
+# - Utility cost is an estimate derived from Oracle demand and settled receipts
+#   (as described in your methodology), and is not a direct on-chain ledger read.
+# =============================================================================
 
 from __future__ import annotations
 
@@ -35,8 +89,14 @@ import Common_Functions as common
 
 INTERVAL_MINUTES = 15
 INTERVALS_PER_DAY = 96
-KWH_PER_U = 0.01                 # 0.01 kWh units
-KW_PER_KWH_INTERVAL = 60 / 15    # 4.0
+
+# Internal energy unit used throughout S3c tooling:
+# qty_u = 1 corresponds to 0.01 kWh
+KWH_PER_U = 0.01       
+
+# Conversion factor for a 15-minute interval:
+# kWh per interval -> kW  (multiply by 4)
+KW_PER_KWH_INTERVAL = 60 / 15    
 
 
 # -----------------------------
@@ -44,6 +104,14 @@ KW_PER_KWH_INTERVAL = 60 / 15    # 4.0
 # -----------------------------
 
 def _find_one(folder: Path, patterns) -> Path:
+    """
+    Find exactly one file in `folder` matching any of the patterns.
+
+    Notes:
+    - Case-insensitive matching is approximated by checking upper/lower forms.
+    - If multiple are found, prefer one containing "final" in the filename.
+    """
+   
     hits = []
     for pat in patterns:
         hits += sorted(folder.glob(pat))
