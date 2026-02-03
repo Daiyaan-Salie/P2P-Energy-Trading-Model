@@ -1,53 +1,64 @@
-# S3 Local Energy Market: End-to-End Execution Guide
+# S3 Local Energy Market  
+**End-to-End Execution Guide**
 
-This guide describes the complete, reproducible execution pipeline for the S3 local energy market system, from smart-contract compilation through on-chain settlement and results generation.
+This guide describes the complete, reproducible execution pipeline for the **S3 Local Energy Market** system — from smart-contract compilation through on-chain settlement and results generation.
 
-It is intended for external examiners and assumes no prior knowledge of the codebase beyond standard Python and Algorand tooling.
+It is intended for **external examiners** and assumes no prior knowledge of the codebase beyond standard **Python** and **Algorand** tooling.
 
-1. Overview of the Pipeline
+---
 
-The system consists of three major phases:
-    1. On-chain infrastructure setup
-        - Smart contract compilation
-        - Asset creation
-        - Application deployment
-        - Market initialization
+## Overview of the Pipeline
 
-    2. Off-chain market scheduling
-        - Oracle-based interval planning and trade matching
+The system consists of **three major phases**, executed sequentially:
 
-    3. On-chain execution and evaluation
-        - Settlement replay on Algorand
-        - Result aggregation and figure generation
+### 1. On-Chain Infrastructure Setup
+- Smart-contract compilation  
+- Asset creation  
+- Application deployment  
+- Market initialization  
 
-Each phase is executed by a dedicated Python script.
-Scripts do not import each other by filename, so they must be run in the correct order.
+### 2. Off-Chain Market Scheduling
+- Oracle-based interval planning  
+- Trade matching  
 
-2. Repository Requirements
-Required files in the working directory
-    - All S3_*.py scripts
-    - config.py
-    - Common_Functions.py
-    - .env (created by the user)
+### 3. On-Chain Execution and Evaluation
+- Settlement replay on Algorand  
+- Result aggregation and figure generation  
 
-Python dependencies
+Each phase is executed by a **dedicated Python script**.  
+Scripts **do not import each other**, so they **must be run in the correct order**.
+
+---
+
+## Repository Requirements
+
+### Required Files (Working Directory)
+- All `S3_*.py` scripts  
+- `config.py`  
+- `Common_Functions.py`  
+- `.env` (created by the user)
+
+### Python Dependencies
 Typical required packages:
-    - pyteal
-    - py-algorand-sdk
-    - python-dotenv
-    - numpy
-    - pandas
-    - matplotlib
+- `pyteal`
+- `py-algorand-sdk`
+- `python-dotenv`
+- `numpy`
+- `pandas`
+- `matplotlib`
 
-3. Environment Configuration (.env)
-Create a file named .env in the same directory as the scripts.
-Minimum required keys (initially):
+---
 
+## Environment Configuration (`.env`)
+
+Create a file named `.env` in the same directory as the scripts.
+
+### Minimum Required Keys (initially)
+```env
 ALGOD_ADDRESS=...
 ALGOD_TOKEN=...
 COORDINATOR_MNEMONIC=...
-
-Additional keys will be added as the pipeline progresses.
+```
 
 4. Step-by-Step Execution
 
